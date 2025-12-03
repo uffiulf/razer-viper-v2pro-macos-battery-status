@@ -1,0 +1,137 @@
+{
+  "file_purpose": "Anbefalinger og notater for Razer Battery Monitor prosjektet",
+  "last_updated": "2024-12-03",
+  "current_status": {
+    "communication": "WORKING - Device responds with Status 0x00, checksum OK",
+    "battery_data": "EMPTY - Response payload is all zeros",
+    "protocol": "OpenRazer structure implemented",
+    "interface": "Interface 2 (strict filtering)"
+  },
+  "current_implementation": {
+    "protocol_structure": {
+      "byte_0": "Status (0x00 = Standard query)",
+      "byte_1": "Transaction ID (0x1F for Viper V2 Pro)",
+      "byte_5": "Data size (0x02 for battery query)",
+      "byte_7": "Command Class (0x07 = Power/Battery)",
+      "byte_8": "Command ID (0x80 = Get Battery Level)",
+      "byte_10": "Battery data location (arguments[1] in OpenRazer)"
+    },
+    "query_strategy": "Single query with 100ms wait",
+    "checksum": "XOR of bytes 2-88, stored in byte 89"
+  },
+  "recommendations": {
+    "if_battery_still_zero": [
+      {
+        "priority": 1,
+        "action": "Increase wait time after sending query",
+        "details": "Current: 100ms. Try 200-500ms. Wireless devices may need more time to wake up and fetch data.",
+        "code_change": "Change usleep(100000) to usleep(200000) or usleep(500000)"
+      },
+      {
+        "priority": 2,
+        "action": "Check if Byte 6 needs a specific value",
+        "details": "Byte 6 is currently 0x00 (reserved). In some Razer protocols, this might be Device ID or need a specific value. Check OpenRazer source code for Viper V2 Pro.",
+        "code_change": "Try report[6] = 0x01 or check OpenRazer driver source"
+      },
+      {
+        "priority": 3,
+        "action": "Verify Data Size byte (Byte 5)",
+        "details": "Currently set to 0x02. Verify if this is correct for battery query. Some commands use 0x01 or 0x03.",
+        "code_change": "Try report[5] = 0x01 or report[5] = 0x03"
+      },
+      {
+        "priority": 4,
+        "action": "Scan multiple response bytes",
+        "details": "Battery data might be at different locations. Add scanning of bytes 8-15 to find non-zero values.",
+        "code_change": "Add loop to scan response[8] through response[15] and print all non-zero values"
+      },
+      {
+        "priority": 5,
+        "action": "Try alternative command IDs",
+        "details": "If 0x80 doesn't work, try 0x82 (Get Charging Status) or 0x83 (alternative battery command)",
+        "code_change": "Try report[8] = 0x82 or report[8] = 0x83"
+      }
+    ],
+    "if_checksum_fails": [
+      {
+        "action": "Verify checksum calculation includes all bytes",
+        "details": "Current: XOR bytes 2-88. Verify this matches OpenRazer implementation exactly.",
+        "reference": "Check OpenRazer source: razer_common.c or similar"
+      }
+    ],
+    "if_device_not_responding": [
+      {
+        "action": "Wake mouse before query",
+        "details": "Wireless mice may be in sleep mode. User should move/click mouse before running query.",
+        "note": "This is a user action, not code change"
+      },
+      {
+        "action": "Add initial delay before first query",
+        "details": "Give device time to initialize after connection. Add 100-200ms delay at start of queryBattery().",
+        "code_change": "Add usleep(100000) at beginning of queryBattery() function"
+      }
+    ],
+    "debugging_tips": [
+      {
+        "tip": "Always check response buffer output",
+        "details": "Look for non-zero values in bytes 8-15. Battery data should appear somewhere in this range."
+      },
+      {
+        "tip": "Verify checksum matches",
+        "details": "Response checksum should match calculated XOR. If not, protocol structure might be wrong."
+      },
+      {
+        "tip": "Compare with OpenRazer output",
+        "details": "If possible, run OpenRazer driver and capture its HID traffic to compare protocol structure."
+      },
+      {
+        "tip": "Test with mouse actively being used",
+        "details": "Move mouse while query runs. Active mice are more likely to respond with battery data."
+      }
+    ]
+  },
+  "openrazer_references": {
+    "note": "This implementation is based on OpenRazer protocol structure",
+    "useful_files": [
+      "razer_common.c - Common protocol functions",
+      "razer_viper_v2_pro.c - Viper V2 Pro specific code",
+      "razer_report.c - Report structure definitions"
+    ],
+    "key_protocol_elements": {
+      "data_size": "Byte 5 - Number of data bytes in request",
+      "command_class": "Byte 7 - Command category (0x07 = Power/Battery)",
+      "command_id": "Byte 8 - Specific command (0x80 = Battery Level)",
+      "arguments": "Bytes 9+ - Command arguments/parameters",
+      "response_arguments": "Bytes 9+ in response - Contains actual data"
+    }
+  },
+  "known_issues": [
+    {
+      "issue": "Empty battery data in response",
+      "status": "Current problem",
+      "possible_causes": [
+        "Mouse is in sleep mode",
+        "Wait time too short",
+        "Wrong protocol structure",
+        "Wrong command ID",
+        "Wrong data size byte"
+      ]
+    }
+  ],
+  "next_steps": [
+    "1. Test current implementation with increased wait time (200-500ms)",
+    "2. If still empty, try different Data Size value (Byte 5)",
+    "3. If still empty, try different Command ID (0x82, 0x83)",
+    "4. Add byte scanning to find where data actually appears",
+    "5. Compare with OpenRazer source code for exact protocol"
+  ],
+  "success_criteria": {
+    "when_working": [
+      "Response Status = 0x00",
+      "Checksum matches",
+      "Non-zero value in response bytes 8-15",
+      "Battery percentage displays correctly in menu bar"
+    ]
+  }
+}
+

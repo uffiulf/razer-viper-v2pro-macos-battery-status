@@ -1,0 +1,21 @@
+# Build artifacts
+*.o
+RazerBatteryMonitor
+CommandScanner
+InterfaceAnalyzer
+QuickTest
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+.DS_Store
+
+# Logs
+*.log
+/tmp/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
