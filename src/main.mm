@@ -11,6 +11,7 @@
 
 - (void)updateBatteryDisplay;
 - (void)pollBattery:(NSTimer*)timer;
+- (void)connectToDevice;
 @end
 
 @implementation BatteryMonitorApp
@@ -19,7 +20,7 @@
     self = [super init];
     if (self) {
         statusItem_ = nil;
-        razerDevice_ = new RazerDevice();
+        razerDevice_ = nil;  // Don't create yet - wait for UI
         pollTimer_ = nil;
         lastBatteryLevel_ = 0;
         notificationShown_ = false;
@@ -40,10 +41,12 @@
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification*)notification {
-    // Initialize status bar item
+    // STEP 1: Create UI FIRST (before any device operations)
     NSStatusBar* statusBar = [NSStatusBar systemStatusBar];
-    statusItem_ = [statusBar statusItemWithLength:NSVariableStatusItemLength];
-    [statusItem_ setHighlightMode:YES];
+    statusItem_ = [[statusBar statusItemWithLength:NSVariableStatusItemLength] retain];
+    
+    // Use modern API for button title
+    statusItem_.button.title = @"🖱️ ...";
     
     // Create menu
     NSMenu* menu = [[NSMenu alloc] init];
@@ -52,15 +55,26 @@
                                                 keyEquivalent:@"q"];
     [quitItem setTarget:NSApp];
     [menu addItem:quitItem];
-    [statusItem_ setMenu:menu];
+    statusItem_.menu = menu;
     
-    // Set initial display
-    [statusItem_ setTitle:@"Razer: --%"];
+    // STEP 2: Force UI to appear immediately
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
     
-    // Connect to device
+    // STEP 3: Connect to device after UI is visible (delayed)
+    [self performSelector:@selector(connectToDevice) withObject:nil afterDelay:0.5];
+}
+
+- (void)connectToDevice {
+    // Create device instance
+    razerDevice_ = new RazerDevice();
+    
+    // Try to connect
     if (!razerDevice_->connect()) {
-        [statusItem_ setTitle:@"Razer: Not Found"];
+        statusItem_.button.title = @"🖱️ Not Found";
         NSLog(@"Failed to connect to Razer Viper V2 Pro");
+        
+        // Retry in 10 seconds
+        [self performSelector:@selector(connectToDevice) withObject:nil afterDelay:10.0];
         return;
     }
     
@@ -76,8 +90,13 @@
 }
 
 - (void)updateBatteryDisplay {
+    if (razerDevice_ == nil) {
+        statusItem_.button.title = @"🖱️ ...";
+        return;
+    }
+    
     if (!razerDevice_->isConnected()) {
-        [statusItem_ setTitle:@"Razer: Disconnected"];
+        statusItem_.button.title = @"🖱️ Disconnected";
         // Try to reconnect
         if (razerDevice_->connect()) {
             NSLog(@"Reconnected to Razer device");
@@ -87,31 +106,22 @@
     
     uint8_t batteryPercent = 0;
     if (razerDevice_->queryBattery(batteryPercent)) {
-        // Only update if we got valid data (not 0% from fallback)
-        if (batteryPercent > 0 || lastBatteryLevel_ == 0) {
-            lastBatteryLevel_ = batteryPercent;
-            NSString* title = [NSString stringWithFormat:@"Razer: %d%%", batteryPercent];
-            [statusItem_ setTitle:title];
-            
-            // Show notification if battery < 20% (only once per low battery event)
-            if (batteryPercent < 20 && batteryPercent > 0 && !notificationShown_) {
-                [self showLowBatteryNotification:batteryPercent];
-                notificationShown_ = true;
-            } else if (batteryPercent >= 20) {
-                notificationShown_ = false;
-            }
-        } else {
-            // Keep last known value if query failed
-            NSString* title = [NSString stringWithFormat:@"Razer: %d%%", lastBatteryLevel_];
-            [statusItem_ setTitle:title];
+        lastBatteryLevel_ = batteryPercent;
+        statusItem_.button.title = [NSString stringWithFormat:@"🖱️ %d%%", batteryPercent];
+        
+        // Show notification if battery < 20% (only once per low battery event)
+        if (batteryPercent < 20 && batteryPercent > 0 && !notificationShown_) {
+            [self showLowBatteryNotification:batteryPercent];
+            notificationShown_ = true;
+        } else if (batteryPercent >= 20) {
+            notificationShown_ = false;
         }
     } else {
         // Query failed - show error but keep last known value if available
         if (lastBatteryLevel_ > 0) {
-            NSString* title = [NSString stringWithFormat:@"Razer: %d%% (?)", lastBatteryLevel_];
-            [statusItem_ setTitle:title];
+            statusItem_.button.title = [NSString stringWithFormat:@"🖱️ %d%% (?)", lastBatteryLevel_];
         } else {
-            [statusItem_ setTitle:@"Razer: Error"];
+            statusItem_.button.title = @"🖱️ Error";
         }
     }
 }

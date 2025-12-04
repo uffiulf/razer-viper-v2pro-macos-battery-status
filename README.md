@@ -79,6 +79,15 @@ The mouse was returning **valid data** (0xFF = 100% battery) but with Status `0x
 3. **Use IOKit directly**: Replaced HIDAPI with macOS IOKit USB Control Transfers
 4. **Correct wIndex**: Changed from `0x02` to `0x00` per librazermacos implementation
 
+### UI Visibility Fix
+
+The menu bar icon was invisible because device connection blocked UI rendering. Fixed by:
+
+1. **Non-blocking startup**: UI creates immediately, device connects after 0.5s delay
+2. **Modern API**: Using `statusItem_.button.title` instead of deprecated `setTitle:`
+3. **Activation Policy**: `NSApplicationActivationPolicyAccessory` for menu bar apps
+4. **Auto-retry**: If device not found, retries every 10 seconds
+
 ---
 
 ## Technical Details
