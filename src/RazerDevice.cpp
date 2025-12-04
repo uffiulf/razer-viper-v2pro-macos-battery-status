@@ -82,11 +82,12 @@ void RazerDevice::disconnect() {
 
 void RazerDevice::calculateChecksum(uint8_t* report) {
     uint8_t checksum = 0;
-    // XOR bytes 2 through 88 (indices 2-88)
-    for (size_t i = 2; i <= 88; ++i) {
+    // XOR bytes 2 through 87 (indices 2-87) - matches librazermacos
+    // This is 86 bytes: [2, 3, 4, ..., 87]
+    for (size_t i = 2; i < 88; ++i) {
         checksum ^= report[i];
     }
-    report[89] = checksum; // Store checksum in byte 89
+    report[88] = checksum; // Store checksum in byte 88 (CRC position)
 }
 
 bool RazerDevice::sendReport(const uint8_t* report) {
