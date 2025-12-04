@@ -228,5 +228,21 @@
    - Printer status-byte tydelig
    - Viser scanning-prosess med suksess/feil-indikatorer
    - Status: Recompiled successfully
-   - **Next Step**: Kjør `sudo ./RazerBatteryMonitor` for å se detaljert output og forstå hvorfor ingen data kommer
+
+16. **Final Protocol Test: Report ID + Byte 1 Parsing** (executed, then reverted)
+   - Testet Report IDs 0x00, 0x01, 0x02 med parsing fra rawBuffer[1]
+   - Ingen batteri-data funnet med noen Report ID
+   - Konklusjon: Trenger offisiell protokoll-dokumentasjon fra Razer
+
+17. **Revert til stabil implementering** (executed)
+   - Fjernet Report ID testing loop
+   - Fjernet `readRawResponse()` metode
+   - Forenklet `queryBattery()` til single-shot implementering:
+     - Report ID: 0x00
+     - Command: 0x07 0x80
+     - TransID: 0x1F
+     - Battery offset: Byte 9 (standard Razer offset)
+   - Koden er nå ren og stabil mens vi venter på dokumentasjon fra Razer
+   - Status: Recompiled successfully
+   - **Note**: Programmet vil returnere 0% batteri inntil korrekt protokoll er kjent
 

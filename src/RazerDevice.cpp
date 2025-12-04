@@ -111,7 +111,7 @@ bool RazerDevice::readResponse(uint8_t* buffer, size_t bufferSize) {
     
     // Read feature report (Report ID will be first byte)
     uint8_t readBuffer[WRITE_BUFFER_SIZE];
-    readBuffer[0] = 0x00; // Set Report ID for feature report request
+    readBuffer[0] = 0x00;
     int result = hid_get_feature_report(device_, readBuffer, WRITE_BUFFER_SIZE);
     
     if (result < 0) {
@@ -131,156 +131,50 @@ bool RazerDevice::queryBattery(uint8_t& batteryPercent) {
         return false;
     }
     
-    // Try multiple protocol variations and command IDs systematically
-    // Based on research: QuickTest uses different byte offsets than our current implementation
+    // Clean, stable single-shot implementation
+    // Protocol: Report ID 0x00, Command 0x07 0x80, TransID 0x1F
+    // Awaiting official documentation from Razer for correct byte offset
     
-    // Protocol variations to try:
-    // Variation 1: Current (Byte 5=Data Size, Byte 7=Class, Byte 8=Command)
-    // Variation 2: QuickTest style (Byte 6=Data Size, Byte 8=Class, Byte 9=Command)
-    // Commands to try: 0x80, 0x82, 0x83
+    // Build the 90-byte report
+    uint8_t report[REPORT_SIZE];
+    std::memset(report, 0, REPORT_SIZE);
     
-    const int commands[] = {0x80, 0x82, 0x83};
-    const int numCommands = sizeof(commands) / sizeof(commands[0]);
+    report[0] = 0x00;  // Status
+    report[1] = 0x1F;  // Transaction ID (wireless)
+    report[5] = 0x02;  // Data size
+    report[7] = 0x07;  // Command Class (Power)
+    report[8] = 0x80;  // Command ID (Get Battery)
     
-    for (int cmdIdx = 0; cmdIdx < numCommands; ++cmdIdx) {
-        uint8_t cmdId = commands[cmdIdx];
-        
-        // Try Variation 1: Current structure
-        std::cout << "\n=== Trying Command 0x" << std::hex << (int)cmdId << std::dec 
-                  << " with Variation 1 (Byte 5=Data Size) ===" << std::endl;
-        
-        uint8_t report[REPORT_SIZE];
-        std::memset(report, 0, REPORT_SIZE);
-        
-        report[0] = 0x00;  // Status
-        report[1] = 0x1F;  // Transaction ID
-        report[5] = 0x02;  // Data size
-        report[7] = 0x07;  // Command Class
-        report[8] = cmdId; // Command ID
-        
-        calculateChecksum(report);
-        
-        // Wake-up delay
-        usleep(200000);  // 200ms
-        
-        if (!sendReport(report)) {
-            std::cerr << "Failed to send query (Variation 1, Cmd 0x" << std::hex << (int)cmdId << std::dec << ")" << std::endl;
-            continue;
-        }
-        
-        // Wait for wireless device (longer wait)
-        usleep(1000000);  // 1000ms (1 second)
-        
-        uint8_t response[REPORT_SIZE];
-        if (!readResponse(response, REPORT_SIZE)) {
-            std::cerr << "Failed to read response (Variation 1, Cmd 0x" << std::hex << (int)cmdId << std::dec << ")" << std::endl;
-            continue;
-        }
-        
-        // DETAILED LOGGING: Print response buffer
-        std::cout << "  Response Status: 0x" << std::hex << (int)response[0] << std::dec << std::endl;
-        std::cout << "  Response buffer (first 20 bytes): ";
-        for (size_t i = 0; i < 20; ++i) {
-            std::printf("%02X ", response[i]);
-        }
-        std::cout << std::endl;
-        std::cout << "  Bytes 9-15 (data area): ";
-        for (size_t i = 9; i <= 15; ++i) {
-            std::printf("Byte[%zu]=0x%02X(%d) ", i, response[i], response[i]);
-        }
-        std::cout << std::endl;
-        
-        if (response[0] != 0x00) {
-            std::cout << "  ⚠️  Status not 0x00: 0x" << std::hex << (int)response[0] << std::dec << " - skipping" << std::endl;
-            continue;
-        }
-        
-        // Scan for battery data in bytes 9-15
-        std::cout << "  Scanning bytes 9-15 for non-zero data (excluding command echo 0x" << std::hex << (int)cmdId << std::dec << ")..." << std::endl;
-        bool foundData = false;
-        for (size_t i = 9; i <= 15; ++i) {
-            if (response[i] != 0x00 && response[i] != cmdId) {  // Ignore command echo
-                uint8_t raw = response[i];
-                if (raw > 0 && raw <= 255) {
-                    batteryPercent = (raw * 100) / 255;
-                    std::cout << "  ✅ *** SUCCESS: Found battery data at byte " << i 
-                              << ": 0x" << std::hex << (int)raw << std::dec 
-                              << " = " << (int)batteryPercent << "% ***" << std::endl;
-                    return true;
-                }
-            }
-        }
-        if (!foundData) {
-            std::cout << "  ❌ No valid battery data found in bytes 9-15" << std::endl;
-        }
-        
-        // Try Variation 2: QuickTest style structure
-        std::cout << "\n=== Trying Command 0x" << std::hex << (int)cmdId << std::dec 
-                  << " with Variation 2 (Byte 6=Data Size, QuickTest style) ===" << std::endl;
-        
-        std::memset(report, 0, REPORT_SIZE);
-        report[0] = 0x00;  // Status
-        report[1] = 0x1F;  // Transaction ID
-        report[6] = 0x02;  // Data size (different offset)
-        report[8] = 0x07;  // Command Class (different offset)
-        report[9] = cmdId; // Command ID (different offset)
-        
-        // Calculate checksum for Variation 2 (XOR bytes 2-88)
-        calculateChecksum(report);
-        
-        usleep(200000);  // 200ms
-        
-        if (!sendReport(report)) {
-            std::cerr << "Failed to send query (Variation 2, Cmd 0x" << std::hex << (int)cmdId << std::dec << ")" << std::endl;
-            continue;
-        }
-        
-        usleep(1000000);  // 1000ms
-        
-        if (!readResponse(response, REPORT_SIZE)) {
-            std::cerr << "Failed to read response (Variation 2, Cmd 0x" << std::hex << (int)cmdId << std::dec << ")" << std::endl;
-            continue;
-        }
-        
-        // DETAILED LOGGING: Print response buffer
-        std::cout << "  Response Status: 0x" << std::hex << (int)response[0] << std::dec << std::endl;
-        std::cout << "  Response buffer (first 20 bytes): ";
-        for (size_t i = 0; i < 20; ++i) {
-            std::printf("%02X ", response[i]);
-        }
-        std::cout << std::endl;
-        std::cout << "  Bytes 10-15 (data area): ";
-        for (size_t i = 10; i <= 15; ++i) {
-            std::printf("Byte[%zu]=0x%02X(%d) ", i, response[i], response[i]);
-        }
-        std::cout << std::endl;
-        
-        if (response[0] != 0x00) {
-            std::cout << "  ⚠️  Status not 0x00: 0x" << std::hex << (int)response[0] << std::dec << " - skipping" << std::endl;
-            continue;
-        }
-        
-        // Scan for battery data (check byte 11 as per QuickTest)
-        std::cout << "  Scanning bytes 10-15 for non-zero data (excluding command echo 0x" << std::hex << (int)cmdId << std::dec << ")..." << std::endl;
-        bool foundData2 = false;
-        for (size_t i = 10; i <= 15; ++i) {
-            if (response[i] != 0x00 && response[i] != cmdId) {
-                uint8_t raw = response[i];
-                if (raw > 0 && raw <= 255) {
-                    batteryPercent = (raw * 100) / 255;
-                    std::cout << "  ✅ *** SUCCESS: Found battery data at byte " << i 
-                              << ": 0x" << std::hex << (int)raw << std::dec 
-                              << " = " << (int)batteryPercent << "% ***" << std::endl;
-                    return true;
-                }
-            }
-        }
-        if (!foundData2) {
-            std::cout << "  ❌ No valid battery data found in bytes 10-15" << std::endl;
-        }
+    // Calculate checksum (XOR bytes 2-88)
+    calculateChecksum(report);
+    
+    // Send command
+    if (!sendReport(report)) {
+        std::cerr << "Failed to send battery query" << std::endl;
+        return false;
     }
     
-    std::cerr << "\n*** FAILED: No battery data found after trying all variations ***" << std::endl;
-    return false;
+    // Wait for device response
+    usleep(500000);  // 500ms
+    
+    // Read response
+    uint8_t response[REPORT_SIZE];
+    if (!readResponse(response, REPORT_SIZE)) {
+        std::cerr << "Failed to read battery response" << std::endl;
+        return false;
+    }
+    
+    // Check status byte
+    if (response[0] != 0x00) {
+        std::cerr << "Battery query failed with status: 0x" << std::hex << (int)response[0] << std::dec << std::endl;
+        return false;
+    }
+    
+    // Parse battery from byte 9 (standard Razer offset)
+    // Note: This may return 0 until we have the correct protocol from Razer
+    uint8_t rawBattery = response[9];
+    batteryPercent = (rawBattery * 100) / 255;
+    
+    return true;
 }
 
