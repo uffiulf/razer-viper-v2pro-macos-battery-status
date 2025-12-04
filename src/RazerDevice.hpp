@@ -38,6 +38,7 @@ private:
     bool sendReport(const uint8_t* report);
     bool readResponse(uint8_t* buffer, size_t bufferSize);
     bool findInterface2(io_service_t device);
+    bool setDeviceMode(uint8_t mode, uint8_t param);
 };
 
 #endif // RAZER_DEVICE_HPP

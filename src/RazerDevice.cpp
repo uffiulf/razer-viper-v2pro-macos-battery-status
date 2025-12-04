@@ -169,6 +169,14 @@ bool RazerDevice::connect() {
     bool success = findInterface2(deviceService);
     IOObjectRelease(deviceService);
     
+    if (success) {
+        // Initialize device: Set to Driver Mode (0x03) before querying
+        std::cout << "\nInitializing device to Driver Mode..." << std::endl;
+        if (!setDeviceMode(0x03, 0x00)) {
+            std::cerr << "Warning: Failed to set Driver Mode (device may still work)" << std::endl;
+        }
+    }
+    
     return success;
 }
 
@@ -182,6 +190,85 @@ void RazerDevice::disconnect() {
         IOObjectRelease(interfaceService_);
         interfaceService_ = 0;
     }
+}
+
+bool RazerDevice::setDeviceMode(uint8_t mode, uint8_t param) {
+    if (usbInterface_ == nullptr) {
+        return false;
+    }
+    
+    std::cout << "\n============================================================" << std::endl;
+    std::cout << "INITIALIZATION: Setting Device Mode" << std::endl;
+    std::cout << "============================================================" << std::endl;
+    std::cout << "Mode: 0x" << std::hex << (int)mode << std::dec;
+    if (mode == 0x00) std::cout << " (Normal Mode)";
+    else if (mode == 0x03) std::cout << " (Driver Mode)";
+    std::cout << std::endl;
+    std::cout << "Param: 0x" << std::hex << (int)param << std::dec << std::endl;
+    
+    // Build the 90-byte report for Set Device Mode
+    // Command Class: 0x00, Command ID: 0x04, Data Size: 0x02
+    uint8_t report[REPORT_SIZE];
+    std::memset(report, 0, REPORT_SIZE);
+    
+    report[0] = 0x00;   // Status: New Command
+    report[1] = 0xFF;   // Transaction ID (Wired)
+    report[2] = 0x00;   // Remaining Packets (high)
+    report[3] = 0x00;   // Remaining Packets (low)
+    report[4] = 0x00;   // Protocol Type
+    report[5] = 0x02;   // Data Size
+    report[6] = 0x00;   // Command Class: Device
+    report[7] = 0x04;   // Command ID: Set Mode
+    report[8] = mode;   // args[0]: Mode (0x03 = Driver Mode)
+    report[9] = param;  // args[1]: Param (0x00)
+    
+    // Calculate checksum
+    calculateChecksum(report);
+    
+    std::cout << "Report (first 12 bytes): ";
+    for (size_t i = 0; i < 12; ++i) {
+        std::printf("%02X ", report[i]);
+    }
+    std::cout << std::endl;
+    
+    // Send the report
+    if (!sendReport(report)) {
+        std::cerr << "Failed to send Set Device Mode command" << std::endl;
+        return false;
+    }
+    
+    // Wait for device to process
+    usleep(100000);  // 100ms
+    
+    // Read response
+    uint8_t response[REPORT_SIZE];
+    std::memset(response, 0, REPORT_SIZE);
+    
+    if (!readResponse(response, REPORT_SIZE)) {
+        std::cerr << "Failed to read Set Device Mode response" << std::endl;
+        return false;
+    }
+    
+    std::cout << "Response (first 12 bytes): ";
+    for (size_t i = 0; i < 12; ++i) {
+        std::printf("%02X ", response[i]);
+    }
+    std::cout << std::endl;
+    
+    uint8_t status = response[0];
+    std::cout << "Response Status: 0x" << std::hex << (int)status << std::dec;
+    if (status == 0x00) std::cout << " (Success)";
+    else if (status == 0x02) std::cout << " (Busy)";
+    else if (status == 0x03) std::cout << " (Failure)";
+    std::cout << std::endl;
+    
+    std::cout << "============================================================\n" << std::endl;
+    
+    // Wait for mode switch to complete
+    std::cout << "Waiting 500ms for device mode switch to complete..." << std::endl;
+    usleep(500000);  // 500ms
+    
+    return (status == 0x00);
 }
 
 void RazerDevice::calculateChecksum(uint8_t* report) {
@@ -199,11 +286,12 @@ bool RazerDevice::sendReport(const uint8_t* report) {
     }
     
     // USB Control Transfer - SET_REPORT via Interface
+    // NOTE: wIndex = 0x00 for mice (per librazermacos), NOT the interface number!
     IOUSBDevRequest request;
     request.bmRequestType = USB_TYPE_CLASS | USB_RECIP_INTERFACE | USB_DIR_OUT;  // 0x21
     request.bRequest = HID_REQ_SET_REPORT;  // 0x09
     request.wValue = 0x0300;  // Feature Report, Report ID 0
-    request.wIndex = TARGET_INTERFACE;  // Interface 2
+    request.wIndex = 0x00;  // Protocol index for mice (librazermacos default)
     request.wLength = REPORT_SIZE;  // 90 bytes
     request.pData = (void*)report;
     
@@ -223,11 +311,12 @@ bool RazerDevice::readResponse(uint8_t* buffer, size_t bufferSize) {
     }
     
     // USB Control Transfer - GET_REPORT via Interface
+    // NOTE: wIndex = 0x00 for mice (per librazermacos), NOT the interface number!
     IOUSBDevRequest request;
     request.bmRequestType = USB_TYPE_CLASS | USB_RECIP_INTERFACE | USB_DIR_IN;  // 0xA1
     request.bRequest = HID_REQ_GET_REPORT;  // 0x01
     request.wValue = 0x0300;  // Feature Report, Report ID 0
-    request.wIndex = TARGET_INTERFACE;  // Interface 2
+    request.wIndex = 0x00;  // Protocol index for mice (librazermacos default)
     request.wLength = REPORT_SIZE;  // 90 bytes
     request.pData = buffer;
     
