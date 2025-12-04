@@ -9,8 +9,11 @@ A native macOS menu bar application that displays battery status for the Razer V
 ## Features
 
 - 🔋 Real-time battery percentage in menu bar
+- ⚡ Charging indicator when USB cable connected
+- 🎨 Color-coded battery (🔴 <20%, 🟠 21-30%, ⚪ >30%)
 - 🔔 Low battery notifications (< 20%)
-- 🖱️ Works with Razer Viper V2 Pro (VID: 0x1532, PID: 0x00A6)
+- 🔄 Auto-refresh every 30 seconds
+- 🖱️ Hover tooltip shows device name
 - 🍎 Native macOS app using Cocoa + IOKit
 - 📦 DMG installer with drag-and-drop installation
 
@@ -37,6 +40,21 @@ sudo ./RazerBatteryMonitor
 ./create_release.sh
 open RazerBatteryMonitor.dmg
 ```
+
+---
+
+## Usage
+
+| State | Display |
+|-------|---------|
+| Wireless (battery OK) | `🖱️ 85%` |
+| Wireless (low battery) | `🖱️ 15%` (red) |
+| Charging via USB | `🖱️ 100% ⚡` |
+| Device not found | `🖱️ Not Found` |
+
+**Menu options:**
+- **Refresh** - Force immediate battery update
+- **Quit** - Exit the application
 
 ---
 
@@ -75,18 +93,10 @@ The mouse was returning **valid data** (0xFF = 100% battery) but with Status `0x
 ### The Solution
 
 1. **Accept Status 0x02**: Wireless Razer devices often return `Status 0x02` (Busy/Data Ready) with valid data
-2. **Use Transaction ID 0x1F**: The wireless protocol ID works for Viper V2 Pro
-3. **Use IOKit directly**: Replaced HIDAPI with macOS IOKit USB Control Transfers
-4. **Correct wIndex**: Changed from `0x02` to `0x00` per librazermacos implementation
-
-### UI Visibility Fix
-
-The menu bar icon was invisible because device connection blocked UI rendering. Fixed by:
-
-1. **Non-blocking startup**: UI creates immediately, device connects after 0.5s delay
-2. **Modern API**: Using `statusItem_.button.title` instead of deprecated `setTitle:`
-3. **Activation Policy**: `NSApplicationActivationPolicyAccessory` for menu bar apps
-4. **Auto-retry**: If device not found, retries every 10 seconds
+2. **Handle Status 0x04**: When wired, returns "Command not supported" - assume charging
+3. **Use Transaction ID 0x1F**: The wireless protocol ID works for Viper V2 Pro
+4. **Use IOKit directly**: Replaced HIDAPI with macOS IOKit USB Control Transfers
+5. **Correct wIndex**: Changed from `0x02` to `0x00` per librazermacos implementation
 
 ---
 
@@ -100,7 +110,7 @@ Byte 1:     Transaction ID (0x1F for wireless)
 Bytes 2-4:  Reserved
 Byte 5:     Data Size (0x02)
 Byte 6:     Command Class (0x07 = Power)
-Byte 7:     Command ID (0x80 = Get Battery)
+Byte 7:     Command ID (0x80 = Get Battery, 0x84 = Get Charging)
 Bytes 8-87: Arguments (battery at byte 9)
 Byte 88:    Checksum (XOR of bytes 2-87)
 Byte 89:    Reserved
@@ -123,7 +133,7 @@ wLength:       90 bytes
 | Transport | HIDAPI | IOKit USB Control Transfer |
 | wIndex | 0x02 (interface) | 0x00 (protocol) |
 | Transaction ID | 0xFF (wired) | 0x1F (wireless) |
-| Valid Status | 0x00 only | 0x00 OR 0x02 |
+| Valid Status | 0x00 only | 0x00, 0x02, or 0x04 |
 
 ---
 
@@ -133,15 +143,16 @@ wLength:       90 bytes
 ┌─────────────────────────────────────────────────────────┐
 │                    main.mm (Objective-C++)              │
 │  ┌─────────────────┐  ┌──────────────────────────────┐  │
-│  │  NSStatusItem   │  │  NSTimer (15 min polling)    │  │
-│  │  (Menu Bar UI)  │  │                              │  │
+│  │  NSStatusItem   │  │  NSTimer (30s polling)       │  │
+│  │  (Menu Bar UI)  │  │  USB Hotplug Notifications   │  │
 │  └────────┬────────┘  └──────────────┬───────────────┘  │
 │           │                          │                  │
 │           └──────────┬───────────────┘                  │
 │                      ▼                                  │
 │           ┌──────────────────────┐                      │
 │           │    RazerDevice.cpp   │                      │
-│           │  (USB Communication) │                      │
+│           │  - queryBattery()    │                      │
+│           │  - queryChargingStatus() │                  │
 │           └──────────┬───────────┘                      │
 │                      │                                  │
 └──────────────────────┼──────────────────────────────────┘

@@ -15,6 +15,7 @@ public:
     bool connect();
     void disconnect();
     bool queryBattery(uint8_t& batteryPercent);
+    bool queryChargingStatus(bool& isCharging);
     bool isConnected() const { return usbInterface_ != nullptr; }
 
 private:

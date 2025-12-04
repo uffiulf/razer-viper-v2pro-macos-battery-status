@@ -300,48 +300,110 @@ bool RazerDevice::readResponse(uint8_t* buffer, size_t bufferSize) {
 
 bool RazerDevice::queryBattery(uint8_t& batteryPercent) {
     // Query battery level using Razer HID protocol
-    // TransID: 0x1F (Wireless), Command: 0x07 0x80 (Power/Get Battery)
-    // Battery data returned at byte 9 (0-255 scale)
+    // Try both Transaction IDs: 0x1F (Wireless) and 0xFF (Wired)
     
     if (usbInterface_ == nullptr) {
         return false;
     }
     
-    uint8_t report[REPORT_SIZE];
-    std::memset(report, 0, REPORT_SIZE);
+    const uint8_t transIds[] = {0x1F, 0xFF};
     
-    report[0] = 0x00;   // Status: New Command
-    report[1] = 0x1F;   // Transaction ID: Wireless
-    report[5] = 0x02;   // Data Size
-    report[6] = 0x07;   // Command Class: Power
-    report[7] = 0x80;   // Command ID: Get Battery Level
-    
-    calculateChecksum(report);
-    
-    if (!sendReport(report)) {
-        return false;
-    }
-    
-    usleep(100000);  // 100ms wait for device response
-    
-    uint8_t response[REPORT_SIZE];
-    std::memset(response, 0, REPORT_SIZE);
-    
-    if (!readResponse(response, REPORT_SIZE)) {
-        return false;
-    }
-    
-    uint8_t status = response[0];
-    uint8_t rawBattery = response[9];  // Battery data at byte 9
-    
-    // Accept Status 0x00 (Success) OR 0x02 (Busy with data ready)
-    // Wireless Razer devices often return valid data with Status 0x02
-    if (status == 0x00 || status == 0x02) {
-        // Scale 0-255 to 0-100%
-        batteryPercent = (rawBattery * 100) / 255;
-        return true;
+    for (int i = 0; i < 2; i++) {
+        uint8_t report[REPORT_SIZE];
+        std::memset(report, 0, REPORT_SIZE);
+        
+        report[0] = 0x00;
+        report[1] = transIds[i];
+        report[5] = 0x02;
+        report[6] = 0x07;
+        report[7] = 0x80;
+        
+        calculateChecksum(report);
+        
+        if (!sendReport(report)) {
+            continue;
+        }
+        
+        usleep(100000);
+        
+        uint8_t response[REPORT_SIZE];
+        std::memset(response, 0, REPORT_SIZE);
+        
+        if (!readResponse(response, REPORT_SIZE)) {
+            continue;
+        }
+        
+        uint8_t status = response[0];
+        uint8_t rawBattery = response[9];
+        
+        // Status 0x00 or 0x02 = Success with data
+        if ((status == 0x00 || status == 0x02) && rawBattery > 0) {
+            batteryPercent = (rawBattery * 100) / 255;
+            return true;
+        }
+        
+        // Status 0x04 = Wired mode (command not supported = charging via cable)
+        if (status == 0x04) {
+            batteryPercent = 100;  // Assume full when wired
+            return true;
+        }
     }
     
     batteryPercent = 0;
+    return false;
+}
+
+bool RazerDevice::queryChargingStatus(bool& isCharging) {
+    // Query charging status using Command 0x84 (per librazermacos)
+    // Try both Transaction IDs: 0x1F (Wireless) and 0xFF (Wired)
+    
+    if (usbInterface_ == nullptr) {
+        isCharging = false;
+        return false;
+    }
+    
+    const uint8_t transIds[] = {0x1F, 0xFF};
+    
+    for (int i = 0; i < 2; i++) {
+        uint8_t report[REPORT_SIZE];
+        std::memset(report, 0, REPORT_SIZE);
+        
+        report[0] = 0x00;
+        report[1] = transIds[i];
+        report[5] = 0x02;
+        report[6] = 0x07;
+        report[7] = 0x84;  // Get Charging Status
+        
+        calculateChecksum(report);
+        
+        if (!sendReport(report)) {
+            continue;
+        }
+        
+        usleep(100000);
+        
+        uint8_t response[REPORT_SIZE];
+        std::memset(response, 0, REPORT_SIZE);
+        
+        if (!readResponse(response, REPORT_SIZE)) {
+            continue;
+        }
+        
+        uint8_t status = response[0];
+        
+        // Status 0x00 or 0x02 = Valid response
+        if (status == 0x00 || status == 0x02) {
+            isCharging = (response[9] == 0x01);
+            return true;
+        }
+        
+        // Status 0x04 = Wired mode (command not supported = charging via cable)
+        if (status == 0x04) {
+            isCharging = true;  // Wired = Charging
+            return true;
+        }
+    }
+    
+    isCharging = false;
     return false;
 }
