@@ -212,7 +212,7 @@ bool RazerDevice::setDeviceMode(uint8_t mode, uint8_t param) {
     std::memset(report, 0, REPORT_SIZE);
     
     report[0] = 0x00;   // Status: New Command
-    report[1] = 0xFF;   // Transaction ID (Wired)
+    report[1] = 0x1F;   // Transaction ID: Wireless (consistent with Viper V2 Pro)
     report[2] = 0x00;   // Remaining Packets (high)
     report[3] = 0x00;   // Remaining Packets (low)
     report[4] = 0x00;   // Protocol Type
@@ -336,143 +336,76 @@ bool RazerDevice::queryBattery(uint8_t& batteryPercent) {
     }
     
     // ============================================================
-    // MATRIX TEST: Systematic Protocol Discovery
+    // BATTERY QUERY: Viper V2 Pro
+    // Working combination: TransID 0x1F + Cmd 0x80
+    // Accept Status 0x00 (Success) or 0x02 (Busy) with valid data
     // ============================================================
-    // Test all combinations of Transaction IDs and Commands
-    // to find the correct protocol for Viper V2 Pro (0x00A6)
-    // ============================================================
     
-    std::cout << "\n============================================================" << std::endl;
-    std::cout << "MATRIX TEST: Protocol Discovery for Viper V2 Pro" << std::endl;
-    std::cout << "============================================================" << std::endl;
-    std::cout << "Testing Transaction IDs: 0xFF (Wired), 0x1F (Wireless), 0x3F (Pro)" << std::endl;
-    std::cout << "Testing Commands: 0x80 (Battery), 0x82 (Charging Status)" << std::endl;
-    std::cout << "============================================================\n" << std::endl;
+    // Build the 90-byte report
+    uint8_t report[REPORT_SIZE];
+    std::memset(report, 0, REPORT_SIZE);
     
-    // Transaction IDs to test
-    const uint8_t transactionIds[] = {0xFF, 0x1F, 0x3F};
-    const char* transIdNames[] = {"0xFF (Wired/Default)", "0x1F (Wireless/Newer)", "0x3F (Pro Models)"};
-    const int numTransIds = 3;
+    report[0] = 0x00;   // Status: New Command
+    report[1] = 0x1F;   // Transaction ID: Wireless (works for Viper V2 Pro)
+    report[2] = 0x00;   // Remaining Packets (high)
+    report[3] = 0x00;   // Remaining Packets (low)
+    report[4] = 0x00;   // Protocol Type
+    report[5] = 0x02;   // Data Size
+    report[6] = 0x07;   // Command Class: Power
+    report[7] = 0x80;   // Command ID: Get Battery Level
     
-    // Commands to test
-    const uint8_t commands[] = {0x80, 0x82};
-    const char* cmdNames[] = {"0x80 (Get Battery)", "0x82 (Get Charging Status)"};
-    const int numCmds = 2;
+    // Calculate checksum (XOR bytes 2-87, store in byte 88)
+    calculateChecksum(report);
     
-    int testNumber = 0;
-    
-    // Matrix test: all combinations
-    for (int t = 0; t < numTransIds; ++t) {
-        for (int c = 0; c < numCmds; ++c) {
-            testNumber++;
-            uint8_t transId = transactionIds[t];
-            uint8_t cmdId = commands[c];
-            
-            std::cout << "------------------------------------------------------------" << std::endl;
-            std::cout << "TEST " << testNumber << "/" << (numTransIds * numCmds) << ": "
-                      << "TransID " << transIdNames[t] << " + Cmd " << cmdNames[c] << std::endl;
-            std::cout << "------------------------------------------------------------" << std::endl;
-            
-            // Build the report
-            uint8_t report[REPORT_SIZE];
-            std::memset(report, 0, REPORT_SIZE);
-            
-            report[0] = 0x00;   // Status: New Command
-            report[1] = transId; // Transaction ID (varies)
-            report[2] = 0x00;   // Remaining Packets (high)
-            report[3] = 0x00;   // Remaining Packets (low)
-            report[4] = 0x00;   // Protocol Type
-            report[5] = 0x02;   // Data Size
-            report[6] = 0x07;   // Command Class: Power
-            report[7] = cmdId;  // Command ID (varies)
-            
-            // Calculate checksum
-            calculateChecksum(report);
-            
-            // Send the report
-            if (!sendReport(report)) {
-                std::cout << "  [SKIP] Failed to send report" << std::endl;
-                continue;
-            }
-            
-            // Wait for device to process
-            usleep(100000);  // 100ms
-            
-            // Read response
-            uint8_t response[REPORT_SIZE];
-            std::memset(response, 0, REPORT_SIZE);
-            
-            if (!readResponse(response, REPORT_SIZE)) {
-                std::cout << "  [SKIP] Failed to read response" << std::endl;
-                continue;
-            }
-            
-            // Print response summary
-            std::cout << "  Response (first 12 bytes): ";
-            for (size_t i = 0; i < 12; ++i) {
-                std::printf("%02X ", response[i]);
-            }
-            std::cout << std::endl;
-            
-            // Check key values
-            uint8_t status = response[0];
-            uint8_t byte8 = response[8];   // arguments[0]
-            uint8_t byte9 = response[9];   // arguments[1] - expected battery location
-            uint8_t byte10 = response[10]; // arguments[2]
-            
-            std::cout << "  Status: 0x" << std::hex << (int)status << std::dec;
-            if (status == 0x00) std::cout << " (Success)";
-            else if (status == 0x02) std::cout << " (Busy)";
-            else if (status == 0x03) std::cout << " (Failure)";
-            std::cout << std::endl;
-            
-            std::cout << "  Byte 8 (args[0]): 0x" << std::hex << (int)byte8 << std::dec 
-                      << " (" << (int)byte8 << ")" << std::endl;
-            std::cout << "  Byte 9 (args[1]): 0x" << std::hex << (int)byte9 << std::dec 
-                      << " (" << (int)byte9 << ")" << std::endl;
-            std::cout << "  Byte 10 (args[2]): 0x" << std::hex << (int)byte10 << std::dec 
-                      << " (" << (int)byte10 << ")" << std::endl;
-            
-            // Check for SUCCESS: any non-zero value in data bytes
-            bool foundData = false;
-            int dataLocation = -1;
-            uint8_t dataValue = 0;
-            
-            // Check bytes 8, 9, 10 for potential battery data
-            for (int i = 8; i <= 10; ++i) {
-                if (response[i] != 0x00) {
-                    foundData = true;
-                    dataLocation = i;
-                    dataValue = response[i];
-                    break;
-                }
-            }
-            
-            if (foundData && status == 0x00) {
-                std::cout << "\n  >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>" << std::endl;
-                std::cout << "  >>> POTENTIAL SUCCESS DETECTED! <<<" << std::endl;
-                std::cout << "  >>> TransID: 0x" << std::hex << (int)transId << std::dec << std::endl;
-                std::cout << "  >>> Command: 0x" << std::hex << (int)cmdId << std::dec << std::endl;
-                std::cout << "  >>> Data at Byte " << dataLocation << ": 0x" << std::hex << (int)dataValue 
-                          << std::dec << " (" << (int)dataValue << ")" << std::endl;
-                std::cout << "  >>> Battery: " << ((int)dataValue * 100 / 255) << "%" << std::endl;
-                std::cout << "  >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n" << std::endl;
-                
-                // Return this as the battery value
-                batteryPercent = (dataValue * 100) / 255;
-                return true;
-            } else {
-                std::cout << "  [NO DATA] Empty response for this combination" << std::endl;
-            }
-            
-            std::cout << std::endl;
-        }
+    // Send the report
+    if (!sendReport(report)) {
+        std::cerr << "Failed to send battery query" << std::endl;
+        return false;
     }
     
-    std::cout << "============================================================" << std::endl;
-    std::cout << "MATRIX TEST COMPLETE: No valid battery data found" << std::endl;
-    std::cout << "============================================================" << std::endl;
+    // Wait for device to process
+    usleep(100000);  // 100ms
     
+    // Read response
+    uint8_t response[REPORT_SIZE];
+    std::memset(response, 0, REPORT_SIZE);
+    
+    if (!readResponse(response, REPORT_SIZE)) {
+        std::cerr << "Failed to read battery response" << std::endl;
+        return false;
+    }
+    
+    // Check response status
+    uint8_t status = response[0];
+    uint8_t rawBattery = response[9];  // Battery data at byte 9 (arguments[1])
+    
+    // Debug output
+    std::cout << "Battery Query Response:" << std::endl;
+    std::cout << "  Status: 0x" << std::hex << (int)status << std::dec;
+    if (status == 0x00) std::cout << " (Success)";
+    else if (status == 0x02) std::cout << " (Busy/Data Ready)";
+    else if (status == 0x03) std::cout << " (Failure)";
+    std::cout << std::endl;
+    std::cout << "  Raw Battery (Byte 9): 0x" << std::hex << (int)rawBattery 
+              << std::dec << " (" << (int)rawBattery << ")" << std::endl;
+    
+    // Accept Status 0x00 (Success) OR Status 0x02 (Busy) with valid data
+    // Wireless devices often return data with Status 0x02
+    if ((status == 0x00 || status == 0x02) && rawBattery > 0) {
+        // Scale 0-255 to 0-100%
+        batteryPercent = (rawBattery * 100) / 255;
+        std::cout << "  Battery: " << (int)batteryPercent << "%" << std::endl;
+        return true;
+    }
+    
+    // If status is good but no data, still return what we have
+    if (status == 0x00 || status == 0x02) {
+        batteryPercent = (rawBattery * 100) / 255;
+        std::cout << "  Battery: " << (int)batteryPercent << "% (may be charging or zero)" << std::endl;
+        return true;
+    }
+    
+    std::cerr << "Battery query failed with status: 0x" << std::hex << (int)status << std::dec << std::endl;
     batteryPercent = 0;
     return false;
 }
