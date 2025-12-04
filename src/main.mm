@@ -145,8 +145,15 @@
 @end
 
 int main(int argc, const char* argv[]) {
+    (void)argc;  // Unused
+    (void)argv;  // Unused
+    
     @autoreleasepool {
         NSApplication* app = [NSApplication sharedApplication];
+        
+        // Force Menu Bar Accessory mode (required when running raw binary without .app bundle)
+        [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
+        
         BatteryMonitorApp* delegate = [[BatteryMonitorApp alloc] init];
         [app setDelegate:delegate];
         [app run];

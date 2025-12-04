@@ -1,3 +1,35 @@
+/**
+ * RazerDevice.cpp - Razer Viper V2 Pro Battery Monitor
+ * 
+ * USB HID Protocol for Razer Viper V2 Pro (VID: 0x1532, PID: 0x00A6)
+ * 
+ * PROTOCOL DETAILS (discovered via librazermacos analysis):
+ * - Transaction ID: 0x1F (Wireless protocol, works for Viper V2 Pro)
+ * - Command Class: 0x07 (Power/Battery)
+ * - Command ID: 0x80 (Get Battery Level)
+ * - Data Size: 0x02
+ * - Battery Data: Response byte 9 (0-255 scale, map to 0-100%)
+ * - Valid Status: 0x00 (Success) OR 0x02 (Busy with data ready)
+ * 
+ * USB Control Transfer Parameters:
+ * - bmRequestType: 0x21 (SET) / 0xA1 (GET)
+ * - bRequest: 0x09 (SET_REPORT) / 0x01 (GET_REPORT)
+ * - wValue: 0x0300 (Feature Report, ID 0)
+ * - wIndex: 0x00 (protocol index for mice)
+ * - wLength: 90 bytes
+ * 
+ * Report Structure (90 bytes):
+ * [0]     Status: 0x00 = New Command
+ * [1]     Transaction ID: 0x1F for wireless
+ * [2-4]   Reserved
+ * [5]     Data Size: 0x02
+ * [6]     Command Class: 0x07 = Power
+ * [7]     Command ID: 0x80 = Get Battery
+ * [8-87]  Arguments (battery at byte 9)
+ * [88]    Checksum (XOR of bytes 2-87)
+ * [89]    Reserved
+ */
+
 #include "RazerDevice.hpp"
 #include <cstring>
 #include <iostream>
@@ -42,10 +74,7 @@ bool RazerDevice::findInterface2(io_service_t device) {
     
     // Open device to iterate interfaces
     kr = (*deviceInterface)->USBDeviceOpen(deviceInterface);
-    if (kr != kIOReturnSuccess) {
-        // Device might already be open by system, try to proceed anyway
-        std::cout << "Note: Device already open by system (0x" << std::hex << kr << std::dec << ")" << std::endl;
-    }
+    // Note: Device might already be open by system - this is OK, we proceed anyway
     
     // Create interface iterator
     kr = (*deviceInterface)->CreateInterfaceIterator(deviceInterface, &request, &interfaceIterator);
@@ -78,26 +107,15 @@ bool RazerDevice::findInterface2(io_service_t device) {
                 UInt8 interfaceNumber;
                 (*interface)->GetInterfaceNumber(interface, &interfaceNumber);
                 
-                std::cout << "Found interface " << (int)interfaceNumber << std::endl;
-                
                 if (interfaceNumber == TARGET_INTERFACE) {
-                    std::cout << "Target Interface 2 found!" << std::endl;
-                    
-                    // Open this interface
+                    // Open Interface 2 (vendor-specific control interface)
                     kr = (*interface)->USBInterfaceOpen(interface);
-                    if (kr == kIOReturnSuccess) {
-                        usbInterface_ = interface;
-                        interfaceService_ = usbInterfaceRef;
-                        found = true;
-                        std::cout << "Interface 2 opened successfully!" << std::endl;
-                    } else if (kr == kIOReturnExclusiveAccess) {
-                        std::cout << "Interface 2 has exclusive access, trying without open..." << std::endl;
-                        // Some operations might work without opening
+                    if (kr == kIOReturnSuccess || kr == kIOReturnExclusiveAccess) {
+                        // Success or exclusive access (we can still send control requests)
                         usbInterface_ = interface;
                         interfaceService_ = usbInterfaceRef;
                         found = true;
                     } else {
-                        std::cerr << "Failed to open Interface 2: 0x" << std::hex << kr << std::dec << std::endl;
                         (*interface)->Release(interface);
                     }
                     break;
@@ -126,13 +144,9 @@ bool RazerDevice::connect() {
         return true; // Already connected
     }
     
-    std::cout << "Searching for Razer Viper V2 Pro (VID: 0x" << std::hex << VENDOR_ID 
-              << ", PID: 0x" << PRODUCT_ID << std::dec << ")..." << std::endl;
-    
     // Create matching dictionary for USB devices
     CFMutableDictionaryRef matchingDict = IOServiceMatching(kIOUSBDeviceClassName);
     if (matchingDict == nullptr) {
-        std::cerr << "Failed to create matching dictionary" << std::endl;
         return false;
     }
     
@@ -150,7 +164,6 @@ bool RazerDevice::connect() {
     io_iterator_t iterator;
     kern_return_t kr = IOServiceGetMatchingServices(kIOMainPortDefault, matchingDict, &iterator);
     if (kr != KERN_SUCCESS) {
-        std::cerr << "Failed to get matching services: " << kr << std::endl;
         return false;
     }
     
@@ -159,22 +172,16 @@ bool RazerDevice::connect() {
     IOObjectRelease(iterator);
     
     if (deviceService == 0) {
-        std::cerr << "Device not found" << std::endl;
-        return false;
+        return false;  // Device not found
     }
-    
-    std::cout << "Found device, searching for Interface 2..." << std::endl;
     
     // Find and open Interface 2
     bool success = findInterface2(deviceService);
     IOObjectRelease(deviceService);
     
     if (success) {
-        // Initialize device: Set to Driver Mode (0x03) before querying
-        std::cout << "\nInitializing device to Driver Mode..." << std::endl;
-        if (!setDeviceMode(0x03, 0x00)) {
-            std::cerr << "Warning: Failed to set Driver Mode (device may still work)" << std::endl;
-        }
+        // Initialize device to Driver Mode (0x03) - enables battery queries
+        setDeviceMode(0x03, 0x00);
     }
     
     return success;
@@ -193,82 +200,43 @@ void RazerDevice::disconnect() {
 }
 
 bool RazerDevice::setDeviceMode(uint8_t mode, uint8_t param) {
+    // Set Device Mode command - switches device to Driver Mode (0x03)
+    // This enables battery queries on wireless Razer devices
     if (usbInterface_ == nullptr) {
         return false;
     }
     
-    std::cout << "\n============================================================" << std::endl;
-    std::cout << "INITIALIZATION: Setting Device Mode" << std::endl;
-    std::cout << "============================================================" << std::endl;
-    std::cout << "Mode: 0x" << std::hex << (int)mode << std::dec;
-    if (mode == 0x00) std::cout << " (Normal Mode)";
-    else if (mode == 0x03) std::cout << " (Driver Mode)";
-    std::cout << std::endl;
-    std::cout << "Param: 0x" << std::hex << (int)param << std::dec << std::endl;
-    
-    // Build the 90-byte report for Set Device Mode
-    // Command Class: 0x00, Command ID: 0x04, Data Size: 0x02
     uint8_t report[REPORT_SIZE];
     std::memset(report, 0, REPORT_SIZE);
     
     report[0] = 0x00;   // Status: New Command
-    report[1] = 0x1F;   // Transaction ID: Wireless (consistent with Viper V2 Pro)
-    report[2] = 0x00;   // Remaining Packets (high)
-    report[3] = 0x00;   // Remaining Packets (low)
-    report[4] = 0x00;   // Protocol Type
+    report[1] = 0x1F;   // Transaction ID: Wireless
     report[5] = 0x02;   // Data Size
     report[6] = 0x00;   // Command Class: Device
     report[7] = 0x04;   // Command ID: Set Mode
     report[8] = mode;   // args[0]: Mode (0x03 = Driver Mode)
-    report[9] = param;  // args[1]: Param (0x00)
+    report[9] = param;  // args[1]: Param
     
-    // Calculate checksum
     calculateChecksum(report);
     
-    std::cout << "Report (first 12 bytes): ";
-    for (size_t i = 0; i < 12; ++i) {
-        std::printf("%02X ", report[i]);
-    }
-    std::cout << std::endl;
-    
-    // Send the report
     if (!sendReport(report)) {
-        std::cerr << "Failed to send Set Device Mode command" << std::endl;
         return false;
     }
     
-    // Wait for device to process
-    usleep(100000);  // 100ms
+    usleep(100000);  // 100ms wait for processing
     
-    // Read response
     uint8_t response[REPORT_SIZE];
     std::memset(response, 0, REPORT_SIZE);
     
     if (!readResponse(response, REPORT_SIZE)) {
-        std::cerr << "Failed to read Set Device Mode response" << std::endl;
         return false;
     }
     
-    std::cout << "Response (first 12 bytes): ";
-    for (size_t i = 0; i < 12; ++i) {
-        std::printf("%02X ", response[i]);
-    }
-    std::cout << std::endl;
-    
-    uint8_t status = response[0];
-    std::cout << "Response Status: 0x" << std::hex << (int)status << std::dec;
-    if (status == 0x00) std::cout << " (Success)";
-    else if (status == 0x02) std::cout << " (Busy)";
-    else if (status == 0x03) std::cout << " (Failure)";
-    std::cout << std::endl;
-    
-    std::cout << "============================================================\n" << std::endl;
-    
     // Wait for mode switch to complete
-    std::cout << "Waiting 500ms for device mode switch to complete..." << std::endl;
-    usleep(500000);  // 500ms
+    usleep(300000);  // 300ms
     
-    return (status == 0x00);
+    // Accept Status 0x00 (Success) or 0x02 (Busy/Acknowledged)
+    return (response[0] == 0x00 || response[0] == 0x02);
 }
 
 void RazerDevice::calculateChecksum(uint8_t* report) {
@@ -331,81 +299,49 @@ bool RazerDevice::readResponse(uint8_t* buffer, size_t bufferSize) {
 }
 
 bool RazerDevice::queryBattery(uint8_t& batteryPercent) {
+    // Query battery level using Razer HID protocol
+    // TransID: 0x1F (Wireless), Command: 0x07 0x80 (Power/Get Battery)
+    // Battery data returned at byte 9 (0-255 scale)
+    
     if (usbInterface_ == nullptr) {
         return false;
     }
     
-    // ============================================================
-    // BATTERY QUERY: Viper V2 Pro
-    // Working combination: TransID 0x1F + Cmd 0x80
-    // Accept Status 0x00 (Success) or 0x02 (Busy) with valid data
-    // ============================================================
-    
-    // Build the 90-byte report
     uint8_t report[REPORT_SIZE];
     std::memset(report, 0, REPORT_SIZE);
     
     report[0] = 0x00;   // Status: New Command
-    report[1] = 0x1F;   // Transaction ID: Wireless (works for Viper V2 Pro)
-    report[2] = 0x00;   // Remaining Packets (high)
-    report[3] = 0x00;   // Remaining Packets (low)
-    report[4] = 0x00;   // Protocol Type
+    report[1] = 0x1F;   // Transaction ID: Wireless
     report[5] = 0x02;   // Data Size
     report[6] = 0x07;   // Command Class: Power
     report[7] = 0x80;   // Command ID: Get Battery Level
     
-    // Calculate checksum (XOR bytes 2-87, store in byte 88)
     calculateChecksum(report);
     
-    // Send the report
     if (!sendReport(report)) {
-        std::cerr << "Failed to send battery query" << std::endl;
         return false;
     }
     
-    // Wait for device to process
-    usleep(100000);  // 100ms
+    usleep(100000);  // 100ms wait for device response
     
-    // Read response
     uint8_t response[REPORT_SIZE];
     std::memset(response, 0, REPORT_SIZE);
     
     if (!readResponse(response, REPORT_SIZE)) {
-        std::cerr << "Failed to read battery response" << std::endl;
         return false;
     }
     
-    // Check response status
     uint8_t status = response[0];
-    uint8_t rawBattery = response[9];  // Battery data at byte 9 (arguments[1])
+    uint8_t rawBattery = response[9];  // Battery data at byte 9
     
-    // Debug output
-    std::cout << "Battery Query Response:" << std::endl;
-    std::cout << "  Status: 0x" << std::hex << (int)status << std::dec;
-    if (status == 0x00) std::cout << " (Success)";
-    else if (status == 0x02) std::cout << " (Busy/Data Ready)";
-    else if (status == 0x03) std::cout << " (Failure)";
-    std::cout << std::endl;
-    std::cout << "  Raw Battery (Byte 9): 0x" << std::hex << (int)rawBattery 
-              << std::dec << " (" << (int)rawBattery << ")" << std::endl;
-    
-    // Accept Status 0x00 (Success) OR Status 0x02 (Busy) with valid data
-    // Wireless devices often return data with Status 0x02
-    if ((status == 0x00 || status == 0x02) && rawBattery > 0) {
+    // Accept Status 0x00 (Success) OR 0x02 (Busy with data ready)
+    // Wireless Razer devices often return valid data with Status 0x02
+    if (status == 0x00 || status == 0x02) {
         // Scale 0-255 to 0-100%
         batteryPercent = (rawBattery * 100) / 255;
-        std::cout << "  Battery: " << (int)batteryPercent << "%" << std::endl;
         return true;
     }
     
-    // If status is good but no data, still return what we have
-    if (status == 0x00 || status == 0x02) {
-        batteryPercent = (rawBattery * 100) / 255;
-        std::cout << "  Battery: " << (int)batteryPercent << "% (may be charging or zero)" << std::endl;
-        return true;
-    }
-    
-    std::cerr << "Battery query failed with status: 0x" << std::hex << (int)status << std::dec << std::endl;
     batteryPercent = 0;
     return false;
 }

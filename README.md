@@ -1,123 +1,199 @@
 # Razer Viper V2 Pro Battery Monitor for macOS
 
-A native macOS menu bar application to display battery status for the Razer Viper V2 Pro wireless mouse.
+A native macOS menu bar application that displays battery status for the Razer Viper V2 Pro wireless mouse.
 
-## Current Status: 🔧 Work in Progress
+![Status: Working](https://img.shields.io/badge/Status-Working-brightgreen)
+![Platform: macOS](https://img.shields.io/badge/Platform-macOS-blue)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
 
-The application successfully communicates with the mouse via IOKit USB Control Transfers, but battery data is not yet being returned correctly.
+## Features
 
----
-
-## Technical Implementation
-
-### Architecture
-- **Backend**: C++ using macOS IOKit for USB communication
-- **Frontend**: Objective-C++ using Cocoa (NSStatusBar)
-- **Target Device**: Razer Viper V2 Pro (VID: 0x1532, PID: 0x00A6)
-
-### Protocol Details (from librazermacos analysis)
-```
-Report Structure (90 bytes):
-- Byte 0: Status (0x00 = New Command)
-- Byte 1: Transaction ID (0xFF wired, 0x1F wireless)
-- Bytes 2-4: Reserved
-- Byte 5: Data Size (0x02)
-- Byte 6: Command Class (0x07 = Power)
-- Byte 7: Command ID (0x80 = Get Battery)
-- Bytes 8-87: Arguments
-- Byte 88: Checksum (XOR of bytes 2-87)
-- Byte 89: Reserved
-```
-
-### USB Control Transfer Parameters
-```
-bmRequestType: 0x21 (SET) / 0xA1 (GET)
-bRequest: 0x09 (SET_REPORT) / 0x01 (GET_REPORT)
-wValue: 0x0300 (Feature Report, ID 0)
-wIndex: 0x00 (protocol index for mice)
-wLength: 90
-```
+- 🔋 Real-time battery percentage in menu bar
+- 🔔 Low battery notifications (< 20%)
+- 🖱️ Works with Razer Viper V2 Pro (VID: 0x1532, PID: 0x00A6)
+- 🍎 Native macOS app using Cocoa + IOKit
+- 📦 DMG installer with drag-and-drop installation
 
 ---
 
-## Latest Changes (Dec 4, 2025)
+## Installation
 
-### 1. Switched from HIDAPI to IOKit
-- HIDAPI Feature Reports were not working reliably
-- Now using direct USB Control Transfers via `IOUSBInterfaceInterface`
+### From DMG (Recommended)
+1. Download `RazerBatteryMonitor.dmg`
+2. Open the DMG and drag the app to Applications
+3. Right-click the app → "Open" (first time only, to bypass Gatekeeper)
+4. Grant Input Monitoring permission if prompted
 
-### 2. Implemented Device Mode Initialization
-- Added `setDeviceMode(0x03, 0x00)` to switch device to "Driver Mode"
-- Device acknowledges the command with Status 0x00
-
-### 3. Fixed wIndex Parameter
-- **Previous**: `wIndex = 0x02` (USB Interface number)
-- **Current**: `wIndex = 0x00` (protocol index per librazermacos)
-- Mice use wIndex=0 by default, not the interface number
-
-### 4. Matrix Test Implementation
-- Systematically tests all combinations:
-  - Transaction IDs: 0xFF, 0x1F, 0x3F
-  - Commands: 0x80, 0x82
-
----
-
-## Known Problem
-
-### Symptom
-The device responds with Status 0x00 (Success), but the response buffer is an **echo of the request** with empty data bytes:
-
-```
-Request:  00 FF 00 00 00 02 07 80 00 00 ...
-Response: 00 FF 00 00 00 02 07 80 00 00 ... (Byte 9 = 0x00)
-```
-
-### Analysis
-1. ✅ USB Interface 2 is correctly opened
-2. ✅ Device Mode initialization succeeds
-3. ✅ Commands are being received (Status 0x00)
-4. ❓ Data payload is empty (device echoes command)
-
-### Hypothesis
-The Viper V2 Pro (0x00A6) is a newer device not supported by librazermacos. It may:
-1. Use a different Transaction ID
-2. Require a different initialization sequence
-3. Have battery data at a different byte offset
-4. Need a proprietary command not documented in OpenRazer
-
----
-
-## Potential Fixes to Try
-
-### 1. Try Interface 0 for ControlRequest
-The USB Control Transfer might need to go through Interface 0 (default HID) instead of Interface 2.
-
-### 2. Try Different wValue (Report ID)
-Test wValue = 0x0301 or 0x0302 in case Viper V2 Pro uses a different Report ID.
-
-### 3. Contact Razer Support
-Request official HID protocol documentation for Viper V2 Pro battery queries.
-
-### 4. USB Traffic Analysis
-Use Wireshark with USBPcap on Windows (where Razer Synapse works) to capture the exact USB packets for battery queries.
-
----
-
-## Building
-
+### From Source
 ```bash
-# Requirements: Xcode Command Line Tools, hidapi (optional now)
+git clone https://github.com/uffiulf/razer-viper-v2pro-macos-battery-status.git
+cd razer-viper-v2pro-macos-battery-status
 make
-
-# Run (requires sudo for USB access)
 sudo ./RazerBatteryMonitor
 ```
+
+### Build Release DMG
+```bash
+./create_release.sh
+open RazerBatteryMonitor.dmg
+```
+
+---
+
+## The Problem & Solution
+
+### The Challenge
+
+The Razer Viper V2 Pro (PID: 0x00A6) is a newer device **not officially supported** by open-source Razer drivers like [librazermacos](https://github.com/1kc/librazermacos) or [OpenRazer](https://github.com/openrazer/openrazer). No documentation exists for its USB HID protocol.
+
+### What Went Wrong (Initial Attempts)
+
+1. **HIDAPI Failed**: Using `hid_write()` froze the mouse completely because it conflicts with the mouse's input endpoint.
+
+2. **Feature Reports Echoed**: Switching to `hid_send_feature_report()` worked for communication, but the device returned empty data (0x00) at the expected battery byte.
+
+3. **Wrong Interface**: We were sending USB Control Transfers with `wIndex = 0x02` (the USB interface number), but Razer mice expect `wIndex = 0x00` (protocol index).
+
+4. **Status 0x02 Rejected**: Our code only accepted `Status 0x00` (Success) as valid. We were discarding responses with `Status 0x02` (Busy) even when they contained valid battery data!
+
+### How We Found the Fix
+
+We implemented a **Matrix Test** that systematically tested all combinations of:
+- Transaction IDs: `0xFF` (Wired), `0x1F` (Wireless), `0x3F` (Pro)
+- Commands: `0x80` (Get Battery), `0x82` (Get Charging Status)
+
+The test revealed:
+
+```
+TEST 3: TransID 0x1F + Cmd 0x80
+  Status: 0x02 (Busy)
+  Byte 9: 0xFF (255)
+```
+
+The mouse was returning **valid data** (0xFF = 100% battery) but with Status `0x02` instead of `0x00`. Our code was rejecting this as a failure!
+
+### The Solution
+
+1. **Accept Status 0x02**: Wireless Razer devices often return `Status 0x02` (Busy/Data Ready) with valid data
+2. **Use Transaction ID 0x1F**: The wireless protocol ID works for Viper V2 Pro
+3. **Use IOKit directly**: Replaced HIDAPI with macOS IOKit USB Control Transfers
+4. **Correct wIndex**: Changed from `0x02` to `0x00` per librazermacos implementation
+
+---
+
+## Technical Details
+
+### Protocol Structure (90 bytes)
+
+```
+Byte 0:     Status (0x00 = New Command)
+Byte 1:     Transaction ID (0x1F for wireless)
+Bytes 2-4:  Reserved
+Byte 5:     Data Size (0x02)
+Byte 6:     Command Class (0x07 = Power)
+Byte 7:     Command ID (0x80 = Get Battery)
+Bytes 8-87: Arguments (battery at byte 9)
+Byte 88:    Checksum (XOR of bytes 2-87)
+Byte 89:    Reserved
+```
+
+### USB Control Transfer
+
+```
+bmRequestType: 0x21 (SET) / 0xA1 (GET)
+bRequest:      0x09 (SET_REPORT) / 0x01 (GET_REPORT)
+wValue:        0x0300 (Feature Report, ID 0)
+wIndex:        0x00 (protocol index for mice)
+wLength:       90 bytes
+```
+
+### Key Discoveries
+
+| Parameter | Wrong Value | Correct Value |
+|-----------|-------------|---------------|
+| Transport | HIDAPI | IOKit USB Control Transfer |
+| wIndex | 0x02 (interface) | 0x00 (protocol) |
+| Transaction ID | 0xFF (wired) | 0x1F (wireless) |
+| Valid Status | 0x00 only | 0x00 OR 0x02 |
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    main.mm (Objective-C++)              │
+│  ┌─────────────────┐  ┌──────────────────────────────┐  │
+│  │  NSStatusItem   │  │  NSTimer (15 min polling)    │  │
+│  │  (Menu Bar UI)  │  │                              │  │
+│  └────────┬────────┘  └──────────────┬───────────────┘  │
+│           │                          │                  │
+│           └──────────┬───────────────┘                  │
+│                      ▼                                  │
+│           ┌──────────────────────┐                      │
+│           │    RazerDevice.cpp   │                      │
+│           │  (USB Communication) │                      │
+│           └──────────┬───────────┘                      │
+│                      │                                  │
+└──────────────────────┼──────────────────────────────────┘
+                       ▼
+              ┌────────────────┐
+              │  IOKit (macOS) │
+              │  USB Control   │
+              │   Transfers    │
+              └────────┬───────┘
+                       ▼
+              ┌────────────────┐
+              │  Razer Viper   │
+              │   V2 Pro       │
+              │  (Interface 2) │
+              └────────────────┘
+```
+
+---
+
+## Files
+
+| File | Description |
+|------|-------------|
+| `src/RazerDevice.cpp` | USB communication via IOKit |
+| `src/RazerDevice.hpp` | Header with constants and class definition |
+| `src/main.mm` | Cocoa UI (NSStatusBar menu bar app) |
+| `Info.plist` | macOS app configuration |
+| `Makefile` | Build configuration |
+| `build_app.sh` | Creates .app bundle |
+| `create_release.sh` | Creates styled DMG installer |
+
+---
+
+## Requirements
+
+- macOS 10.14+ (Mojave or later)
+- Xcode Command Line Tools
+- Razer Viper V2 Pro mouse
+- `create-dmg` (for building DMG): `brew install create-dmg`
+
+---
+
+## Troubleshooting
+
+### "Razer: Not Found"
+- Ensure the mouse is connected (wired or via USB receiver)
+- Check that no other app is claiming the device
+
+### No menu bar icon
+- Run as `.app` bundle, not raw binary
+- Check Activity Monitor for running process
+
+### Permission errors
+- Grant Input Monitoring permission in System Settings
+- First launch may require: right-click → Open
 
 ---
 
 ## References
 
-- [librazermacos](https://github.com/1kc/librazermacos) - Open source Razer driver for macOS
+- [librazermacos](https://github.com/1kc/librazermacos) - Key protocol reference
 - [OpenRazer](https://github.com/openrazer/openrazer) - Linux Razer driver
 - [Alex Perathoner's Razer Battery](https://github.com/alexanderperathoner/razer-battery-menu-bar-macos)
 
@@ -125,5 +201,10 @@ sudo ./RazerBatteryMonitor
 
 ## License
 
-MIT
+MIT License - See [LICENSE](LICENSE) for details.
 
+---
+
+## Contributing
+
+Pull requests welcome! The protocol details documented here may help support other Razer devices.
