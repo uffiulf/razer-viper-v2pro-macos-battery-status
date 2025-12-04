@@ -246,3 +246,12 @@
    - Status: Recompiled successfully
    - **Note**: Programmet vil returnere 0% batteri inntil korrekt protokoll er kjent
 
+### Entry: Matrix Test Implementation
+- **Action**: Implementert systematisk "Tree of Thoughts" Matrix Test
+- **Testing**: Alle kombinasjoner av Transaction IDs og Commands:
+  - Transaction IDs: 0xFF (Wired), 0x1F (Wireless), 0x3F (Pro Models)
+  - Commands: 0x80 (Get Battery), 0x82 (Get Charging Status)
+- **Total kombinasjoner**: 6 tester
+- **Formål**: Identifisere korrekt protokoll for Viper V2 Pro (0x00A6)
+- **Status**: Compiled successfully
+
