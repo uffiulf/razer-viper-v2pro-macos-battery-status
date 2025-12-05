@@ -173,10 +173,29 @@ wLength:       90 bytes
 
 ---
 
-## Requirements
+## System Requirements
 
-- macOS 10.14+ (Mojave or later)
-- Xcode Command Line Tools
+### Supported macOS Versions
+| Version | Codename | Status |
+|---------|----------|--------|
+| macOS 15.x | Sequoia | ✅ Tested |
+| macOS 14.x | Sonoma | ✅ Supported |
+| macOS 13.x | Ventura | ✅ Supported |
+| macOS 12.x | Monterey | ✅ Supported |
+| macOS 11.x | Big Sur | ✅ Supported |
+| macOS 10.15 | Catalina | ✅ Supported |
+| macOS 10.14 | Mojave | ⚠️ Minimum |
+
+### Supported Hardware
+| Architecture | Status |
+|--------------|--------|
+| Apple Silicon (M1/M2/M3/M4) | ✅ Native (arm64) |
+| Intel (x86_64) | ✅ Native (x86_64) |
+
+**Note:** The DMG contains a **Universal Binary** that runs natively on both architectures.
+
+### Other Requirements
+- Xcode Command Line Tools (for building from source)
 - Razer Viper V2 Pro mouse
 - `create-dmg` (for building DMG): `brew install create-dmg`
 
