@@ -13,8 +13,8 @@ A native macOS menu bar application that displays battery status for the Razer V
 - ⚡ Charging indicator when USB cable connected (instant detection)
 - 🎨 Color-coded battery levels:
   - 🔴 Red: ≤20% (Critical)
-  - 🟡 Yellow: 21-30% (Warning)
-  - 🟢 Green: >30% (Good)
+  - 🟡 Yellow: 21-40% (Warning)
+  - 🟢 Green: 41-100% (Good)
 - 🔔 Low battery notifications (< 20%)
 - 🔄 Auto-refresh every 30 seconds + USB hotplug detection
 - 🔌 Automatic Wired/Wireless mode detection via Product ID
@@ -52,14 +52,15 @@ open RazerBatteryMonitor.dmg
 
 | State | Display |
 |-------|---------|
-| Wireless (battery OK) | `🖱️ 85%` (green) |
-| Wireless (low battery) | `🖱️ 15%` (red) |
+| Wireless (battery OK) | `🖱️ 85%` (green) - 41-100% |
+| Wireless (battery warning) | `🖱️ 30%` (yellow) - 21-40% |
+| Wireless (low battery) | `🖱️ 15%` (red) - ≤20% |
 | Charging via USB | `🖱️ 100% ⚡` (green) |
 | Device not found | `🖱️ Not Found` |
 
 **Menu options:**
-- **Refresh** - Force immediate battery update
-- **Quit** - Exit the application
+- **Refresh** (⌘R) - Force immediate battery update without restarting
+- **Quit** (⌘Q) - Exit the application
 
 ---
 
@@ -223,7 +224,7 @@ wLength:       90 bytes
 - **PID-based mode detection**: Instant wired/wireless detection using USB Product ID
   - PID 0xA5 = Wired (Charging)
   - PID 0xA6 = Wireless (Dongle)
-- **Color-coded battery**: Red (≤20%), Yellow (21-30%), Green (>30%)
+- **Color-coded battery**: Red (≤20%), Yellow (21-40%), Green (41-100%)
 - **Charging status fix**: Correctly reads byte 11 for charging state
 - **USB hotplug monitoring**: Detects cable connect/disconnect events
 

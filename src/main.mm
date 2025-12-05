@@ -202,11 +202,11 @@ static void onDeviceChange(void* context) {
         // Color based on battery level
         NSColor* textColor;
         if (batteryPercent <= 20) {
-            textColor = [NSColor systemRedColor];      // Critical: Red
-        } else if (batteryPercent <= 30) {
-            textColor = [NSColor systemYellowColor];   // Warning: Yellow
+            textColor = [NSColor systemRedColor];      // Critical: Red (0-20%)
+        } else if (batteryPercent <= 40) {
+            textColor = [NSColor systemYellowColor];   // Warning: Yellow (21-40%)
         } else {
-            textColor = [NSColor systemGreenColor];    // Good: Green
+            textColor = [NSColor systemGreenColor];    // Good: Green (41-100%)
         }
         
         // Apply colored title
