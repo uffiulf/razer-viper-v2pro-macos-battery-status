@@ -3,30 +3,16 @@
 #import <IOKit/usb/IOUSBLib.h>
 #import "RazerDevice.hpp"
 
-// USB Vendor/Product IDs for Razer Viper V2 Pro
-#define RAZER_VENDOR_ID  0x1532
-#define RAZER_PRODUCT_ID 0x00A6
-
-// Forward declaration for C callback
+// Forward declaration
 @class BatteryMonitorApp;
-static BatteryMonitorApp* gAppInstance = nil;
 
-// C callback for USB events
-void usbDeviceCallback(void* refcon, io_iterator_t iterator) {
-    (void)refcon;
-    
-    // Drain the iterator
-    io_service_t device;
-    while ((device = IOIteratorNext(iterator))) {
-        IOObjectRelease(device);
-    }
-    
-    // Trigger update on main thread
-    if (gAppInstance) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [gAppInstance handleUSBEvent];
-        });
-    }
+// Static callback for RazerDevice monitoring
+static void onDeviceChange(void* context) {
+    BatteryMonitorApp* app = (__bridge BatteryMonitorApp*)context;
+    // Ensure we run on main thread for UI updates
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [app performSelector:@selector(handleUSBEvent)];
+    });
 }
 
 @interface BatteryMonitorApp : NSObject <NSApplicationDelegate> {
@@ -35,18 +21,12 @@ void usbDeviceCallback(void* refcon, io_iterator_t iterator) {
     NSTimer* pollTimer_;
     uint8_t lastBatteryLevel_;
     bool notificationShown_;
-    
-    // IOKit USB notification
-    IONotificationPortRef notificationPort_;
-    io_iterator_t deviceAddedIterator_;
-    io_iterator_t deviceRemovedIterator_;
 }
 
 - (void)updateBatteryDisplay;
 - (void)pollBattery:(NSTimer*)timer;
 - (void)connectToDevice;
 - (void)handleUSBEvent;
-- (void)setupUSBNotifications;
 @end
 
 @implementation BatteryMonitorApp
@@ -55,37 +35,23 @@ void usbDeviceCallback(void* refcon, io_iterator_t iterator) {
     self = [super init];
     if (self) {
         statusItem_ = nil;
-        razerDevice_ = nil;
+        // Create device instance immediately and keep it alive
+        razerDevice_ = new RazerDevice();
         pollTimer_ = nil;
         lastBatteryLevel_ = 0;
         notificationShown_ = false;
-        notificationPort_ = NULL;
-        deviceAddedIterator_ = 0;
-        deviceRemovedIterator_ = 0;
-        gAppInstance = self;
     }
     return self;
 }
 
 - (void)dealloc {
-    gAppInstance = nil;
-    
-    // Clean up USB notifications
-    if (deviceAddedIterator_) {
-        IOObjectRelease(deviceAddedIterator_);
-    }
-    if (deviceRemovedIterator_) {
-        IOObjectRelease(deviceRemovedIterator_);
-    }
-    if (notificationPort_) {
-        IONotificationPortDestroy(notificationPort_);
-    }
-    
     if (pollTimer_) {
         [pollTimer_ invalidate];
         pollTimer_ = nil;
     }
     if (razerDevice_) {
+        // Stop monitoring before deleting
+        razerDevice_->stopMonitoring();
         delete razerDevice_;
         razerDevice_ = nil;
     }
@@ -121,85 +87,13 @@ void usbDeviceCallback(void* refcon, io_iterator_t iterator) {
     // STEP 2: Force UI to appear immediately
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
     
-    // STEP 3: Setup USB hotplug notifications
-    [self setupUSBNotifications];
+    // STEP 3: Start IOKit Hotplug Monitoring via RazerDevice
+    if (razerDevice_) {
+        razerDevice_->startMonitoring(onDeviceChange, (__bridge void*)self);
+    }
     
     // STEP 4: Connect to device
     [self performSelector:@selector(connectToDevice) withObject:nil afterDelay:0.5];
-}
-
-- (void)setupUSBNotifications {
-    // Create notification port
-    notificationPort_ = IONotificationPortCreate(kIOMainPortDefault);
-    if (!notificationPort_) {
-        NSLog(@"Failed to create IONotificationPort");
-        return;
-    }
-    
-    // Add to run loop
-    CFRunLoopSourceRef runLoopSource = IONotificationPortGetRunLoopSource(notificationPort_);
-    CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, kCFRunLoopDefaultMode);
-    
-    // Create matching dictionary for Razer devices
-    CFMutableDictionaryRef matchingDict = IOServiceMatching(kIOUSBDeviceClassName);
-    if (!matchingDict) {
-        NSLog(@"Failed to create matching dictionary");
-        return;
-    }
-    
-    // Add VID/PID
-    int vid = RAZER_VENDOR_ID;
-    int pid = RAZER_PRODUCT_ID;
-    CFNumberRef vidRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &vid);
-    CFNumberRef pidRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &pid);
-    CFDictionarySetValue(matchingDict, CFSTR(kUSBVendorID), vidRef);
-    CFDictionarySetValue(matchingDict, CFSTR(kUSBProductID), pidRef);
-    CFRelease(vidRef);
-    CFRelease(pidRef);
-    
-    // Register for device added (need to retain dict for second use)
-    CFRetain(matchingDict);
-    
-    kern_return_t kr = IOServiceAddMatchingNotification(
-        notificationPort_,
-        kIOFirstMatchNotification,
-        matchingDict,
-        usbDeviceCallback,
-        (__bridge void*)self,
-        &deviceAddedIterator_
-    );
-    
-    if (kr != KERN_SUCCESS) {
-        NSLog(@"Failed to register for device added: 0x%x", kr);
-    } else {
-        // Drain initial iterator
-        io_service_t device;
-        while ((device = IOIteratorNext(deviceAddedIterator_))) {
-            IOObjectRelease(device);
-        }
-        NSLog(@"USB hotplug: Listening for device connections");
-    }
-    
-    // Register for device removed
-    kr = IOServiceAddMatchingNotification(
-        notificationPort_,
-        kIOTerminatedNotification,
-        matchingDict,
-        usbDeviceCallback,
-        (__bridge void*)self,
-        &deviceRemovedIterator_
-    );
-    
-    if (kr != KERN_SUCCESS) {
-        NSLog(@"Failed to register for device removed: 0x%x", kr);
-    } else {
-        // Drain initial iterator
-        io_service_t device;
-        while ((device = IOIteratorNext(deviceRemovedIterator_))) {
-            IOObjectRelease(device);
-        }
-        NSLog(@"USB hotplug: Listening for device disconnections");
-    }
 }
 
 - (void)handleUSBEvent {
@@ -209,13 +103,37 @@ void usbDeviceCallback(void* refcon, io_iterator_t iterator) {
     if (razerDevice_) {
         razerDevice_->disconnect();
         
-        // Small delay to let USB settle
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            if (razerDevice_->connect()) {
-                [self updateBatteryDisplay];
-            } else {
-                statusItem_.button.title = @"🖱️ Not Found";
-            }
+        // Aggressive Retry Logic: Try to reconnect multiple times
+        // This ensures we catch the device as soon as it finishes enumeration
+        
+        // 1s
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (razerDevice_->connect()) [self updateBatteryDisplay];
+        });
+
+        // 3s
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (razerDevice_->connect()) [self updateBatteryDisplay];
+        });
+
+        // 6s
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (razerDevice_->connect()) [self updateBatteryDisplay];
+        });
+        
+        // 10s
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (razerDevice_->connect()) [self updateBatteryDisplay];
+        });
+        
+        // 15s - Last attempt
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+             if (razerDevice_->connect()) {
+                 [self updateBatteryDisplay];
+             } else {
+                 // Only show "Not Found" if ALL attempts fail after 15 seconds
+                 statusItem_.button.title = @"🖱️ Not Found";
+             }
         });
     }
 }
@@ -226,17 +144,12 @@ void usbDeviceCallback(void* refcon, io_iterator_t iterator) {
 }
 
 - (void)connectToDevice {
-    // Create device instance if needed
-    if (!razerDevice_) {
-        razerDevice_ = new RazerDevice();
-    }
-    
     // Try to connect
     if (!razerDevice_->connect()) {
         statusItem_.button.title = @"🖱️ Not Found";
         NSLog(@"Failed to connect to Razer Viper V2 Pro");
         
-        // Retry in 10 seconds
+        // Retry in 10 seconds if initial connection fails
         [self performSelector:@selector(connectToDevice) withObject:nil afterDelay:10.0];
         return;
     }
@@ -244,11 +157,10 @@ void usbDeviceCallback(void* refcon, io_iterator_t iterator) {
     // Initial battery query
     [self updateBatteryDisplay];
     
-    // Set up polling timer (30 seconds for responsive updates)
-    // USB hotplug doesn't work for this because the wireless receiver stays connected
-    // when the mouse cable is plugged in - only the mouse changes mode internally
+    // Set up polling timer (30 seconds)
+    // We still keep this as a fallback for battery % changes over time
     if (!pollTimer_) {
-        pollTimer_ = [NSTimer scheduledTimerWithTimeInterval:30.0  // 30 seconds
+        pollTimer_ = [NSTimer scheduledTimerWithTimeInterval:30.0
                                                        target:self
                                                      selector:@selector(pollBattery:)
                                                      userInfo:nil
@@ -263,11 +175,12 @@ void usbDeviceCallback(void* refcon, io_iterator_t iterator) {
     }
     
     if (!razerDevice_->isConnected()) {
-        statusItem_.button.title = @"🖱️ Disconnected";
-        if (razerDevice_->connect()) {
-            NSLog(@"Reconnected to Razer device");
+        // Only show disconnected if we really can't connect after a retry
+        if (!razerDevice_->connect()) {
+             statusItem_.button.title = @"🖱️ Disconnected";
+             return;
         }
-        return;
+        NSLog(@"Reconnected to Razer device");
     }
     
     uint8_t batteryPercent = 0;
@@ -289,11 +202,11 @@ void usbDeviceCallback(void* refcon, io_iterator_t iterator) {
         // Color based on battery level
         NSColor* textColor;
         if (batteryPercent <= 20) {
-            textColor = [NSColor systemRedColor];
+            textColor = [NSColor systemRedColor];      // Critical: Red
         } else if (batteryPercent <= 30) {
-            textColor = [NSColor systemOrangeColor];
+            textColor = [NSColor systemYellowColor];   // Warning: Yellow
         } else {
-            textColor = [NSColor labelColor];
+            textColor = [NSColor systemGreenColor];    // Good: Green
         }
         
         // Apply colored title
@@ -311,17 +224,17 @@ void usbDeviceCallback(void* refcon, io_iterator_t iterator) {
             notificationShown_ = false;
         }
     } else {
-        NSString* errorText;
+        // If query fails, keep last known value to avoid flickering "Error"
         if (lastBatteryLevel_ > 0) {
-            errorText = [NSString stringWithFormat:@"🖱️ %d%% (?)", lastBatteryLevel_];
+             // Only show (?) if it persists
         } else {
-            errorText = @"🖱️ Error";
+            NSString* errorText = @"🖱️ Error";
+            NSDictionary* attrs = @{
+                NSForegroundColorAttributeName: [NSColor systemGrayColor],
+                NSFontAttributeName: [NSFont menuBarFontOfSize:0]
+            };
+            statusItem_.button.attributedTitle = [[NSAttributedString alloc] initWithString:errorText attributes:attrs];
         }
-        NSDictionary* attrs = @{
-            NSForegroundColorAttributeName: [NSColor systemGrayColor],
-            NSFontAttributeName: [NSFont menuBarFontOfSize:0]
-        };
-        statusItem_.button.attributedTitle = [[NSAttributedString alloc] initWithString:errorText attributes:attrs];
     }
 }
 
@@ -349,6 +262,7 @@ void usbDeviceCallback(void* refcon, io_iterator_t iterator) {
         pollTimer_ = nil;
     }
     if (razerDevice_) {
+        razerDevice_->stopMonitoring();
         razerDevice_->disconnect();
     }
 }

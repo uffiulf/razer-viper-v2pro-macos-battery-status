@@ -34,12 +34,160 @@
 #include <cstring>
 #include <iostream>
 #include <unistd.h>
+#include <string>
+#include <algorithm>
+#include <cctype>
 
-RazerDevice::RazerDevice() : usbInterface_(nullptr), interfaceService_(0) {
+RazerDevice::RazerDevice() 
+    : usbInterface_(nullptr), 
+      interfaceService_(0),
+      isDongle_(true),  // Assume wireless by default
+      notificationPort_(nullptr),
+      addedIter_(0),
+      removedIter_(0),
+      callback_(nullptr),
+      callbackContext_(nullptr) {
 }
 
 RazerDevice::~RazerDevice() {
+    stopMonitoring();
     disconnect();
+}
+
+void RazerDevice::startMonitoring(DeviceCallback callback, void* context) {
+    if (notificationPort_ != nullptr) {
+        return; // Already monitoring
+    }
+
+    callback_ = callback;
+    callbackContext_ = context;
+
+    // Create notification port
+    notificationPort_ = IONotificationPortCreate(kIOMainPortDefault);
+    if (!notificationPort_) {
+        std::cerr << "Failed to create IONotificationPort" << std::endl;
+        return;
+    }
+
+    // Add to run loop
+    CFRunLoopSourceRef runLoopSource = IONotificationPortGetRunLoopSource(notificationPort_);
+    CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, kCFRunLoopDefaultMode);
+
+    // Create matching dictionary for Razer devices
+    // NOTE: We only match on VID (not PID) to detect both Dongle (0xA6) and Wired (0xA5)
+    CFMutableDictionaryRef matchingDict = IOServiceMatching(kIOUSBDeviceClassName);
+    if (!matchingDict) {
+        std::cerr << "Failed to create matching dictionary" << std::endl;
+        return;
+    }
+
+    // Add VID only - monitor all Razer devices
+    int vid = VENDOR_ID;
+    CFNumberRef vidRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &vid);
+    CFDictionarySetValue(matchingDict, CFSTR(kUSBVendorID), vidRef);
+    CFRelease(vidRef);
+
+    // Register for device added (retain dict for second use)
+    CFRetain(matchingDict);
+
+    kern_return_t kr = IOServiceAddMatchingNotification(
+        notificationPort_,
+        kIOFirstMatchNotification,
+        matchingDict,
+        deviceAddedCallback,
+        (void*)this,
+        &addedIter_
+    );
+
+    if (kr != KERN_SUCCESS) {
+        std::cerr << "Failed to register for device added: " << std::hex << kr << std::dec << std::endl;
+    } else {
+        // Drain iterator to arm notification
+        deviceAddedCallback(this, addedIter_);
+    }
+
+    // Register for device removed
+    kr = IOServiceAddMatchingNotification(
+        notificationPort_,
+        kIOTerminatedNotification,
+        matchingDict,
+        deviceRemovedCallback,
+        (void*)this,
+        &removedIter_
+    );
+
+    if (kr != KERN_SUCCESS) {
+        std::cerr << "Failed to register for device removed: " << std::hex << kr << std::dec << std::endl;
+    } else {
+        // Drain iterator to arm notification
+        deviceRemovedCallback(this, removedIter_);
+    }
+}
+
+void RazerDevice::stopMonitoring() {
+    if (addedIter_) {
+        IOObjectRelease(addedIter_);
+        addedIter_ = 0;
+    }
+    if (removedIter_) {
+        IOObjectRelease(removedIter_);
+        removedIter_ = 0;
+    }
+    if (notificationPort_) {
+        IONotificationPortDestroy(notificationPort_);
+        notificationPort_ = nullptr;
+    }
+    callback_ = nullptr;
+    callbackContext_ = nullptr;
+}
+
+void RazerDevice::deviceAddedCallback(void* refCon, io_iterator_t iterator) {
+    RazerDevice* self = (RazerDevice*)refCon;
+    io_service_t device;
+    bool newDeviceFound = false;
+    
+    while ((device = IOIteratorNext(iterator))) {
+        IOObjectRelease(device);
+        newDeviceFound = true;
+    }
+    
+    if (newDeviceFound && self->callback_) {
+        self->callback_(self->callbackContext_);
+    }
+}
+
+void RazerDevice::deviceRemovedCallback(void* refCon, io_iterator_t iterator) {
+    RazerDevice* self = (RazerDevice*)refCon;
+    io_service_t device;
+    bool deviceRemoved = false;
+    
+    while ((device = IOIteratorNext(iterator))) {
+        IOObjectRelease(device);
+        deviceRemoved = true;
+    }
+    
+    if (deviceRemoved && self->callback_) {
+        self->callback_(self->callbackContext_);
+    }
+}
+
+std::string RazerDevice::getDeviceName(io_service_t device) {
+    std::string name = "Unknown";
+    CFStringRef deviceName = (CFStringRef)IORegistryEntryCreateCFProperty(
+        device,
+        CFSTR("USB Product Name"),
+        kCFAllocatorDefault,
+        0
+    );
+    
+    if (deviceName) {
+        char buf[256];
+        if (CFStringGetCString(deviceName, buf, sizeof(buf), kCFStringEncodingUTF8)) {
+            name = buf;
+        }
+        CFRelease(deviceName);
+    }
+    return name;
 }
 
 bool RazerDevice::findInterface2(io_service_t device) {
@@ -144,32 +292,49 @@ bool RazerDevice::connect() {
         return true; // Already connected
     }
     
-    // Create matching dictionary for USB devices
-    CFMutableDictionaryRef matchingDict = IOServiceMatching(kIOUSBDeviceClassName);
-    if (matchingDict == nullptr) {
-        return false;
-    }
-    
-    // Add VID/PID to matching dictionary
+    io_service_t deviceService = 0;
     int vid = VENDOR_ID;
-    int pid = PRODUCT_ID;
-    CFNumberRef vidRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &vid);
-    CFNumberRef pidRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &pid);
-    CFDictionarySetValue(matchingDict, CFSTR(kUSBVendorID), vidRef);
-    CFDictionarySetValue(matchingDict, CFSTR(kUSBProductID), pidRef);
-    CFRelease(vidRef);
-    CFRelease(pidRef);
     
-    // Find the device
-    io_iterator_t iterator;
-    kern_return_t kr = IOServiceGetMatchingServices(kIOMainPortDefault, matchingDict, &iterator);
-    if (kr != KERN_SUCCESS) {
-        return false;
+    // Try to find device by PID - check Dongle first (0xA6), then Wired (0xA5)
+    const uint16_t pidsToTry[] = {PRODUCT_ID_DONGLE, PRODUCT_ID_WIRED};
+    
+    for (int i = 0; i < 2; i++) {
+        CFMutableDictionaryRef matchingDict = IOServiceMatching(kIOUSBDeviceClassName);
+        if (matchingDict == nullptr) {
+            continue;
+        }
+        
+        int pid = pidsToTry[i];
+        CFNumberRef vidRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &vid);
+        CFNumberRef pidRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &pid);
+        CFDictionarySetValue(matchingDict, CFSTR(kUSBVendorID), vidRef);
+        CFDictionarySetValue(matchingDict, CFSTR(kUSBProductID), pidRef);
+        CFRelease(vidRef);
+        CFRelease(pidRef);
+        
+        io_iterator_t iterator;
+        kern_return_t kr = IOServiceGetMatchingServices(kIOMainPortDefault, matchingDict, &iterator);
+        if (kr != KERN_SUCCESS) {
+            continue;
+        }
+        
+        deviceService = IOIteratorNext(iterator);
+        IOObjectRelease(iterator);
+        
+        if (deviceService != 0) {
+            // DETECT MODE: PID determines Wired vs. Wireless
+            if (pid == PRODUCT_ID_DONGLE) {
+                isDongle_ = true;
+                std::cout << "Connected via PID 0x" << std::hex << pid << std::dec 
+                          << " (Mode: Wireless/Dongle)" << std::endl;
+            } else {
+                isDongle_ = false;
+                std::cout << "Connected via PID 0x" << std::hex << pid << std::dec 
+                          << " (Mode: Wired/Charging)" << std::endl;
+            }
+            break;
+        }
     }
-    
-    // Get first matching device
-    io_service_t deviceService = IOIteratorNext(iterator);
-    IOObjectRelease(iterator);
     
     if (deviceService == 0) {
         return false;  // Device not found
@@ -353,7 +518,62 @@ bool RazerDevice::queryBattery(uint8_t& batteryPercent) {
     return false;
 }
 
+// DEBUG: Test charging commands to identify correct byte
+void RazerDevice::debugCharging() {
+    if (usbInterface_ == nullptr) return;
+    
+    const uint8_t commands[] = {0x82, 0x84};
+    const char* cmdNames[] = {"0x82", "0x84"};
+    
+    printf("\n=== DEBUG CHARGING STATUS ===\n");
+    printf("isDongle_ = %s\n", isDongle_ ? "true (Wireless)" : "false (Wired)");
+    
+    for (int c = 0; c < 2; c++) {
+        uint8_t report[REPORT_SIZE];
+        std::memset(report, 0, REPORT_SIZE);
+        
+        report[0] = 0x00;
+        report[1] = 0x1F;  // TransID
+        report[5] = 0x02;
+        report[6] = 0x07;
+        report[7] = commands[c];
+        
+        calculateChecksum(report);
+        
+        if (!sendReport(report)) {
+            printf("Cmd %s: SEND FAILED\n", cmdNames[c]);
+            continue;
+        }
+        
+        usleep(100000);
+        
+        uint8_t response[REPORT_SIZE];
+        std::memset(response, 0, REPORT_SIZE);
+        
+        if (!readResponse(response, REPORT_SIZE)) {
+            printf("Cmd %s: READ FAILED\n", cmdNames[c]);
+            continue;
+        }
+        
+        printf("Cmd %s Response: ", cmdNames[c]);
+        for (int i = 0; i < 12; i++) {
+            printf("%02X ", response[i]);
+        }
+        printf("\n");
+    }
+    printf("=============================\n\n");
+}
+
 bool RazerDevice::queryChargingStatus(bool& isCharging) {
+    // FAST PATH: If connected via USB cable (not dongle), we are charging
+    if (!isDongle_) {
+        isCharging = true;
+        return true;
+    }
+    
+    // DEBUG: Print raw responses for both charging commands
+    debugCharging();
+    
     // Query charging status using Command 0x84 (per librazermacos)
     // Try both Transaction IDs: 0x1F (Wireless) and 0xFF (Wired)
     
@@ -392,8 +612,9 @@ bool RazerDevice::queryChargingStatus(bool& isCharging) {
         uint8_t status = response[0];
         
         // Status 0x00 or 0x02 = Valid response
+        // Charging status is in Byte 11 (index 11) per debug analysis
         if (status == 0x00 || status == 0x02) {
-            isCharging = (response[9] == 0x01);
+            isCharging = (response[11] == 0x01);
             return true;
         }
         

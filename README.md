@@ -3,16 +3,21 @@
 A native macOS menu bar application that displays battery status for the Razer Viper V2 Pro wireless mouse.
 
 ![Status: Working](https://img.shields.io/badge/Status-Working-brightgreen)
+![Version: 1.2.0](https://img.shields.io/badge/Version-1.2.0-blue)
 ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
 
 ## Features
 
 - 🔋 Real-time battery percentage in menu bar
-- ⚡ Charging indicator when USB cable connected
-- 🎨 Color-coded battery (🔴 <20%, 🟠 21-30%, ⚪ >30%)
+- ⚡ Charging indicator when USB cable connected (instant detection)
+- 🎨 Color-coded battery levels:
+  - 🔴 Red: ≤20% (Critical)
+  - 🟡 Yellow: 21-30% (Warning)
+  - 🟢 Green: >30% (Good)
 - 🔔 Low battery notifications (< 20%)
-- 🔄 Auto-refresh every 30 seconds
+- 🔄 Auto-refresh every 30 seconds + USB hotplug detection
+- 🔌 Automatic Wired/Wireless mode detection via Product ID
 - 🖱️ Hover tooltip shows device name
 - 🍎 Native macOS app using Cocoa + IOKit
 - 📦 DMG installer with drag-and-drop installation
@@ -47,9 +52,9 @@ open RazerBatteryMonitor.dmg
 
 | State | Display |
 |-------|---------|
-| Wireless (battery OK) | `🖱️ 85%` |
+| Wireless (battery OK) | `🖱️ 85%` (green) |
 | Wireless (low battery) | `🖱️ 15%` (red) |
-| Charging via USB | `🖱️ 100% ⚡` |
+| Charging via USB | `🖱️ 100% ⚡` (green) |
 | Device not found | `🖱️ Not Found` |
 
 **Menu options:**
@@ -58,45 +63,24 @@ open RazerBatteryMonitor.dmg
 
 ---
 
-## The Problem & Solution
+## How It Works
 
-### The Challenge
+### Wired vs. Wireless Detection
 
-The Razer Viper V2 Pro (PID: 0x00A6) is a newer device **not officially supported** by open-source Razer drivers like [librazermacos](https://github.com/1kc/librazermacos) or [OpenRazer](https://github.com/openrazer/openrazer). No documentation exists for its USB HID protocol.
+The Razer Viper V2 Pro uses **different USB Product IDs** depending on connection type:
 
-### What Went Wrong (Initial Attempts)
+| Connection | Product ID (PID) | Mode |
+|------------|------------------|------|
+| USB Cable (Direct) | `0x00A5` (165) | Wired/Charging |
+| USB Dongle (Wireless) | `0x00A6` (166) | Wireless |
 
-1. **HIDAPI Failed**: Using `hid_write()` froze the mouse completely because it conflicts with the mouse's input endpoint.
+The app detects which PID is present and automatically sets the charging status accordingly. When connected via cable (PID 0xA5), the ⚡ icon appears instantly.
 
-2. **Feature Reports Echoed**: Switching to `hid_send_feature_report()` worked for communication, but the device returned empty data (0x00) at the expected battery byte.
+### Battery Query Protocol
 
-3. **Wrong Interface**: We were sending USB Control Transfers with `wIndex = 0x02` (the USB interface number), but Razer mice expect `wIndex = 0x00` (protocol index).
-
-4. **Status 0x02 Rejected**: Our code only accepted `Status 0x00` (Success) as valid. We were discarding responses with `Status 0x02` (Busy) even when they contained valid battery data!
-
-### How We Found the Fix
-
-We implemented a **Matrix Test** that systematically tested all combinations of:
-- Transaction IDs: `0xFF` (Wired), `0x1F` (Wireless), `0x3F` (Pro)
-- Commands: `0x80` (Get Battery), `0x82` (Get Charging Status)
-
-The test revealed:
-
-```
-TEST 3: TransID 0x1F + Cmd 0x80
-  Status: 0x02 (Busy)
-  Byte 9: 0xFF (255)
-```
-
-The mouse was returning **valid data** (0xFF = 100% battery) but with Status `0x02` instead of `0x00`. Our code was rejecting this as a failure!
-
-### The Solution
-
-1. **Accept Status 0x02**: Wireless Razer devices often return `Status 0x02` (Busy/Data Ready) with valid data
-2. **Handle Status 0x04**: When wired, returns "Command not supported" - assume charging
-3. **Use Transaction ID 0x1F**: The wireless protocol ID works for Viper V2 Pro
-4. **Use IOKit directly**: Replaced HIDAPI with macOS IOKit USB Control Transfers
-5. **Correct wIndex**: Changed from `0x02` to `0x00` per librazermacos implementation
+- **Command 0x80**: Get Battery Level (Byte 9 = 0-255 raw value)
+- **Command 0x84**: Get Charging Status (Byte 11 = 0x01 if charging)
+- **Transaction ID 0x1F**: Wireless protocol (works for Viper V2 Pro)
 
 ---
 
@@ -111,7 +95,7 @@ Bytes 2-4:  Reserved
 Byte 5:     Data Size (0x02)
 Byte 6:     Command Class (0x07 = Power)
 Byte 7:     Command ID (0x80 = Get Battery, 0x84 = Get Charging)
-Bytes 8-87: Arguments (battery at byte 9)
+Bytes 8-87: Arguments (battery at byte 9, charging at byte 11)
 Byte 88:    Checksum (XOR of bytes 2-87)
 Byte 89:    Reserved
 ```
@@ -128,12 +112,14 @@ wLength:       90 bytes
 
 ### Key Discoveries
 
-| Parameter | Wrong Value | Correct Value |
-|-----------|-------------|---------------|
-| Transport | HIDAPI | IOKit USB Control Transfer |
-| wIndex | 0x02 (interface) | 0x00 (protocol) |
-| Transaction ID | 0xFF (wired) | 0x1F (wireless) |
-| Valid Status | 0x00 only | 0x00, 0x02, or 0x04 |
+| Parameter | Description |
+|-----------|-------------|
+| PID 0xA5 | Wired mouse (direct USB connection = charging) |
+| PID 0xA6 | Wireless dongle |
+| Transaction ID 0x1F | Works for Viper V2 Pro (not 0xFF) |
+| Valid Status | 0x00, 0x02, or 0x04 (not just 0x00) |
+| Battery Byte | Response byte 9 (0-255 scale) |
+| Charging Byte | Response byte 11 (0x01 = charging) |
 
 ---
 
@@ -153,6 +139,7 @@ wLength:       90 bytes
 │           │    RazerDevice.cpp   │                      │
 │           │  - queryBattery()    │                      │
 │           │  - queryChargingStatus() │                  │
+│           │  - PID-based mode detect │                  │
 │           └──────────┬───────────┘                      │
 │                      │                                  │
 └──────────────────────┼──────────────────────────────────┘
@@ -176,7 +163,7 @@ wLength:       90 bytes
 
 | File | Description |
 |------|-------------|
-| `src/RazerDevice.cpp` | USB communication via IOKit |
+| `src/RazerDevice.cpp` | USB communication via IOKit, PID detection |
 | `src/RazerDevice.hpp` | Header with constants and class definition |
 | `src/main.mm` | Cocoa UI (NSStatusBar menu bar app) |
 | `Info.plist` | macOS app configuration |
@@ -211,11 +198,30 @@ wLength:       90 bytes
 
 ---
 
+## Changelog
+
+### v1.2.0
+- **PID-based mode detection**: Instant wired/wireless detection using USB Product ID
+  - PID 0xA5 = Wired (Charging)
+  - PID 0xA6 = Wireless (Dongle)
+- **Color-coded battery**: Red (≤20%), Yellow (21-30%), Green (>30%)
+- **Charging status fix**: Correctly reads byte 11 for charging state
+- **USB hotplug monitoring**: Detects cable connect/disconnect events
+
+### v1.1.0
+- IOKit USB Control Transfers (replaced HIDAPI)
+- Driver Mode initialization for wireless devices
+- Accepts Status 0x00, 0x02, and 0x04 responses
+
+### v1.0.0
+- Initial release with basic battery monitoring
+
+---
+
 ## References
 
 - [librazermacos](https://github.com/1kc/librazermacos) - Key protocol reference
 - [OpenRazer](https://github.com/openrazer/openrazer) - Linux Razer driver
-- [Alex Perathoner's Razer Battery](https://github.com/alexanderperathoner/razer-battery-menu-bar-macos)
 
 ---
 
