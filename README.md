@@ -244,6 +244,75 @@ wLength:       90 bytes
 
 ---
 
+## 🔧 Porting to Other Razer Mice
+
+This guide helps you adapt the app for other Razer wireless mice.
+
+### Step 1: Find Your Mouse's USB IDs
+
+```bash
+# On macOS
+ioreg -p IOUSB -l | grep -A10 "Razer"
+
+# Look for:
+# "idVendor" = 0x1532  (always same for Razer)
+# "idProduct" = 0x00XX  (your mouse's PID)
+```
+
+**Note:** Many Razer mice have TWO PIDs - one for the wireless dongle and one for direct USB connection.
+
+### Step 2: Modify `src/RazerDevice.hpp`
+
+```cpp
+// Change these constants to your mouse's PIDs:
+static constexpr uint16_t PRODUCT_ID_DONGLE = 0x00XX;  // Wireless receiver PID
+static constexpr uint16_t PRODUCT_ID_WIRED = 0x00YY;   // Wired connection PID
+```
+
+### Step 3: Test Transaction IDs
+
+Different mice may require different Transaction IDs. Modify `queryBattery()` in `RazerDevice.cpp`:
+
+```cpp
+const uint8_t transIds[] = {0x1F, 0xFF, 0x3F};  // Try all common IDs
+```
+
+| Transaction ID | Typical Use |
+|----------------|-------------|
+| `0x1F` | Newer wireless mice (Viper V2 Pro, DeathAdder V3) |
+| `0xFF` | Older wired mice |
+| `0x3F` | Some Pro models |
+
+### Step 4: Verify Response Bytes
+
+Enable debug output and check which bytes contain data:
+
+- **Byte 9**: Usually battery level (0-255 raw value)
+- **Byte 11**: Usually charging status (0x01 = charging)
+
+If your mouse uses different offsets, adjust in `queryBattery()` and `queryChargingStatus()`.
+
+### Step 5: Known Razer Mouse PIDs
+
+| Mouse | Wireless PID | Wired PID | Status |
+|-------|-------------|-----------|--------|
+| Viper V2 Pro | 0x00A6 | 0x00A5 | ✅ Tested |
+| DeathAdder V3 Pro | 0x00B6 | 0x00B5 | 🔬 Untested |
+| Basilisk V3 Pro | 0x00AA | 0x00A9 | 🔬 Untested |
+| Viper Ultimate | 0x007A | 0x007B | 🔬 Untested |
+| Naga V2 Pro | 0x00AD | ? | 🔬 Untested |
+
+*PIDs may vary by region/revision. Always verify with `ioreg` command.*
+
+### Step 6: Submit Your Changes
+
+If you successfully port to another mouse:
+1. Fork this repository
+2. Add your mouse's PIDs and any protocol differences
+3. Submit a Pull Request with your mouse model in the title
+
+---
+
 ## License
 
 MIT License - See [LICENSE](LICENSE) for details.
@@ -252,4 +321,4 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 ## Contributing
 
-Pull requests welcome! The protocol details documented here may help support other Razer devices.
+Pull requests welcome! If you port this to another Razer mouse, please share your findings to help others.
