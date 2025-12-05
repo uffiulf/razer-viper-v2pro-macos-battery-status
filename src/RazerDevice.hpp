@@ -60,7 +60,6 @@ private:
     bool readResponse(uint8_t* buffer, size_t bufferSize);
     bool findInterface2(io_service_t device);
     bool setDeviceMode(uint8_t mode, uint8_t param);
-    void debugCharging();  // DEBUG: Test charging commands
     
     // Static callbacks for IOKit
     static void deviceAddedCallback(void* refCon, io_iterator_t iterator);
