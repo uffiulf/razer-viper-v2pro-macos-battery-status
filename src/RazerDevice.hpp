@@ -11,6 +11,13 @@
 // Callback type for device change events
 typedef void (*DeviceCallback)(void* context);
 
+// Supported Razer wireless mouse device information
+struct RazerSupportedDevice {
+    uint16_t wirelessPid;
+    uint16_t wiredPid;
+    const char* name;
+};
+
 class RazerDevice {
 public:
     RazerDevice();
@@ -46,7 +53,13 @@ private:
     
     // Wired vs. Wireless detection
     bool isDongle_;  // true = Wireless (Dongle), false = Wired (Direct USB)
+    std::string deviceName_;  // Human-readable device name
     std::string getDeviceName(io_service_t device);
+    std::string getDeviceNameByPid(uint16_t pid);
+    
+    // Supported devices list
+    static const RazerSupportedDevice SUPPORTED_DEVICES[];
+    static const size_t NUM_SUPPORTED_DEVICES;
     
     // IOKit notification members
     IONotificationPortRef notificationPort_;

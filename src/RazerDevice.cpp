@@ -38,10 +38,36 @@
 #include <algorithm>
 #include <cctype>
 
+// List of supported Razer wireless mice (from OpenRazer)
+const RazerSupportedDevice RazerDevice::SUPPORTED_DEVICES[] = {
+    {0x00A6, 0x00A5, "Razer Viper V2 Pro"},
+    {0x007D, 0x007C, "Razer DeathAdder V2 Pro"},
+    {0x007B, 0x007A, "Razer Viper Ultimate"},
+    {0x0088, 0x0086, "Razer Basilisk Ultimate"},
+    {0x0090, 0x008F, "Razer Naga Pro"},
+    {0x00B7, 0x00B6, "Razer DeathAdder V3 Pro"},
+    {0x00AB, 0x00AA, "Razer Basilisk V3 Pro"},
+    {0x00B0, 0x00AF, "Razer Cobra Pro"},
+    {0x00A8, 0x00A7, "Razer Naga V2 Pro"},
+    {0x00BF, 0x00BE, "Razer DeathAdder V4 Pro"},
+    {0x00C1, 0x00C0, "Razer Viper V3 Pro"},
+    {0x0072, 0x0073, "Razer Mamba Wireless"},
+    {0x006F, 0x0070, "Razer Lancehead Wireless"},
+    {0x0094, 0x0095, "Razer Orochi V2"},
+    {0x003F, 0x003E, "Razer Naga Epic Chroma"},
+    {0x0045, 0x0044, "Razer Mamba"},
+    {0x005A, 0x0059, "Razer Lancehead"},
+    {0x0025, 0x0024, "Razer Mamba 2012"},
+    {0x001F, 0x0000, "Razer Naga Epic"}
+};
+
+const size_t RazerDevice::NUM_SUPPORTED_DEVICES = sizeof(RazerDevice::SUPPORTED_DEVICES) / sizeof(RazerSupportedDevice);
+
 RazerDevice::RazerDevice() 
     : usbInterface_(nullptr), 
       interfaceService_(0),
       isDongle_(true),  // Assume wireless by default
+      deviceName_("Unknown Razer Mouse"),
       notificationPort_(nullptr),
       addedIter_(0),
       removedIter_(0),
@@ -193,6 +219,15 @@ std::string RazerDevice::getDeviceName(io_service_t device) {
     return name;
 }
 
+std::string RazerDevice::getDeviceNameByPid(uint16_t pid) {
+    for (size_t i = 0; i < NUM_SUPPORTED_DEVICES; i++) {
+        if (SUPPORTED_DEVICES[i].wirelessPid == pid || SUPPORTED_DEVICES[i].wiredPid == pid) {
+            return std::string(SUPPORTED_DEVICES[i].name);
+        }
+    }
+    return "Unknown Razer Mouse";
+}
+
 bool RazerDevice::findInterface2(io_service_t device) {
     // Create iterator for device's interfaces
     io_iterator_t interfaceIterator;
@@ -298,47 +333,56 @@ bool RazerDevice::connect() {
     io_service_t deviceService = 0;
     int vid = VENDOR_ID;
     
-    // Try to find device by PID - check Dongle first (0xA6), then Wired (0xA5)
-    const uint16_t pidsToTry[] = {PRODUCT_ID_DONGLE, PRODUCT_ID_WIRED};
-    
-    for (int i = 0; i < 2; i++) {
-        CFMutableDictionaryRef matchingDict = IOServiceMatching(kIOUSBDeviceClassName);
-        if (matchingDict == nullptr) {
-            continue;
-        }
+    // Try all supported devices - check wireless PIDs first, then wired
+    for (size_t i = 0; i < NUM_SUPPORTED_DEVICES; i++) {
+        // Try wireless PID first
+        uint16_t pidsToTry[] = {
+            SUPPORTED_DEVICES[i].wirelessPid,
+            SUPPORTED_DEVICES[i].wiredPid
+        };
         
-        int pid = pidsToTry[i];
-        CFNumberRef vidRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &vid);
-        CFNumberRef pidRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &pid);
-        CFDictionarySetValue(matchingDict, CFSTR(kUSBVendorID), vidRef);
-        CFDictionarySetValue(matchingDict, CFSTR(kUSBProductID), pidRef);
-        CFRelease(vidRef);
-        CFRelease(pidRef);
-        
-        io_iterator_t iterator;
-        kern_return_t kr = IOServiceGetMatchingServices(kIOMainPortDefault, matchingDict, &iterator);
-        if (kr != KERN_SUCCESS) {
-            continue;
-        }
-        
-        deviceService = IOIteratorNext(iterator);
-        IOObjectRelease(iterator);
-        
-        if (deviceService != 0) {
-            // DETECT MODE: PID determines Wired vs. Wireless
-            if (pid == PRODUCT_ID_DONGLE) {
-                isDongle_ = true;
-                std::cout << "Connected via PID 0x" << std::hex << pid << std::dec 
-                          << " (Mode: Wireless/Dongle)" << std::endl;
-            } else {
-                isDongle_ = false;
-                std::cout << "Connected via PID 0x" << std::hex << pid << std::dec 
-                          << " (Mode: Wired/Charging)" << std::endl;
+        for (int j = 0; j < 2; j++) {
+            uint16_t pid = pidsToTry[j];
+            if (pid == 0) continue;  // Skip if wired PID not available
+            
+            CFMutableDictionaryRef matchingDict = IOServiceMatching(kIOUSBDeviceClassName);
+            if (matchingDict == nullptr) {
+                continue;
             }
-            break;
+            
+            CFNumberRef vidRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &vid);
+            int pidInt = pid;
+            CFNumberRef pidRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &pidInt);
+            CFDictionarySetValue(matchingDict, CFSTR(kUSBVendorID), vidRef);
+            CFDictionarySetValue(matchingDict, CFSTR(kUSBProductID), pidRef);
+            CFRelease(vidRef);
+            CFRelease(pidRef);
+            
+            io_iterator_t iterator;
+            kern_return_t kr = IOServiceGetMatchingServices(kIOMainPortDefault, matchingDict, &iterator);
+            if (kr != KERN_SUCCESS) {
+                continue;
+            }
+            
+            deviceService = IOIteratorNext(iterator);
+            IOObjectRelease(iterator);
+            
+            if (deviceService != 0) {
+                deviceName_ = SUPPORTED_DEVICES[i].name;
+                
+                // DETECT MODE: Check if this is wireless or wired PID
+                isDongle_ = (pid == SUPPORTED_DEVICES[i].wirelessPid);
+                
+                const char* mode = isDongle_ ? "Wireless/Dongle" : "Wired/Charging";
+                std::cout << "Connected to " << deviceName_ 
+                          << " via PID 0x" << std::hex << pid << std::dec 
+                          << " (Mode: " << mode << ")" << std::endl;
+                goto found_device;
+            }
         }
     }
     
+    found_device:
     if (deviceService == 0) {
         return false;  // Device not found
     }
