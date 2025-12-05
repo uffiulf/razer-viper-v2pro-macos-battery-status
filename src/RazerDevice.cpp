@@ -78,6 +78,9 @@ void RazerDevice::startMonitoring(DeviceCallback callback, void* context) {
     CFMutableDictionaryRef matchingDict = IOServiceMatching(kIOUSBDeviceClassName);
     if (!matchingDict) {
         std::cerr << "Failed to create matching dictionary" << std::endl;
+        // Cleanup notification port on error
+        IONotificationPortDestroy(notificationPort_);
+        notificationPort_ = nullptr;
         return;
     }
 
@@ -518,61 +521,12 @@ bool RazerDevice::queryBattery(uint8_t& batteryPercent) {
     return false;
 }
 
-// DEBUG: Test charging commands to identify correct byte
-void RazerDevice::debugCharging() {
-    if (usbInterface_ == nullptr) return;
-    
-    const uint8_t commands[] = {0x82, 0x84};
-    const char* cmdNames[] = {"0x82", "0x84"};
-    
-    printf("\n=== DEBUG CHARGING STATUS ===\n");
-    printf("isDongle_ = %s\n", isDongle_ ? "true (Wireless)" : "false (Wired)");
-    
-    for (int c = 0; c < 2; c++) {
-        uint8_t report[REPORT_SIZE];
-        std::memset(report, 0, REPORT_SIZE);
-        
-        report[0] = 0x00;
-        report[1] = 0x1F;  // TransID
-        report[5] = 0x02;
-        report[6] = 0x07;
-        report[7] = commands[c];
-        
-        calculateChecksum(report);
-        
-        if (!sendReport(report)) {
-            printf("Cmd %s: SEND FAILED\n", cmdNames[c]);
-            continue;
-        }
-        
-        usleep(100000);
-        
-        uint8_t response[REPORT_SIZE];
-        std::memset(response, 0, REPORT_SIZE);
-        
-        if (!readResponse(response, REPORT_SIZE)) {
-            printf("Cmd %s: READ FAILED\n", cmdNames[c]);
-            continue;
-        }
-        
-        printf("Cmd %s Response: ", cmdNames[c]);
-        for (int i = 0; i < 12; i++) {
-            printf("%02X ", response[i]);
-        }
-        printf("\n");
-    }
-    printf("=============================\n\n");
-}
-
 bool RazerDevice::queryChargingStatus(bool& isCharging) {
     // FAST PATH: If connected via USB cable (not dongle), we are charging
     if (!isDongle_) {
         isCharging = true;
         return true;
     }
-    
-    // DEBUG: Print raw responses for both charging commands
-    debugCharging();
     
     // Query charging status using Command 0x84 (per librazermacos)
     // Try both Transaction IDs: 0x1F (Wireless) and 0xFF (Wired)

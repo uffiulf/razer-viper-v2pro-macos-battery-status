@@ -202,11 +202,11 @@ static void onDeviceChange(void* context) {
         // Color based on battery level
         NSColor* textColor;
         if (batteryPercent <= 20) {
-            textColor = [NSColor systemRedColor];      // Critical: Red
-        } else if (batteryPercent <= 30) {
-            textColor = [NSColor systemYellowColor];   // Warning: Yellow
+            textColor = [NSColor systemRedColor];      // Critical: Red (0-20%)
+        } else if (batteryPercent <= 40) {
+            textColor = [NSColor systemYellowColor];   // Warning: Yellow (21-40%)
         } else {
-            textColor = [NSColor systemGreenColor];    // Good: Green
+            textColor = [NSColor systemGreenColor];    // Good: Green (41-100%)
         }
         
         // Apply colored title
@@ -224,17 +224,18 @@ static void onDeviceChange(void* context) {
             notificationShown_ = false;
         }
     } else {
-        // If query fails, keep last known value to avoid flickering "Error"
+        // If query fails, show cached value with (?) indicator to avoid flickering
+        NSString* errorText;
         if (lastBatteryLevel_ > 0) {
-             // Only show (?) if it persists
+            errorText = [NSString stringWithFormat:@"🖱️ %d%% (?)", lastBatteryLevel_];
         } else {
-            NSString* errorText = @"🖱️ Error";
-            NSDictionary* attrs = @{
-                NSForegroundColorAttributeName: [NSColor systemGrayColor],
-                NSFontAttributeName: [NSFont menuBarFontOfSize:0]
-            };
-            statusItem_.button.attributedTitle = [[NSAttributedString alloc] initWithString:errorText attributes:attrs];
+            errorText = @"🖱️ Error";
         }
+        NSDictionary* attrs = @{
+            NSForegroundColorAttributeName: [NSColor systemGrayColor],
+            NSFontAttributeName: [NSFont menuBarFontOfSize:0]
+        };
+        statusItem_.button.attributedTitle = [[NSAttributedString alloc] initWithString:errorText attributes:attrs];
     }
 }
 
