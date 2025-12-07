@@ -6,7 +6,17 @@ A native macOS menu bar application that displays battery status for supported R
 ![Version: 1.2.0](https://img.shields.io/badge/Version-1.2.0-blue)
 ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-blue)
 
+
+
+
+-------------------------------------------------------------------------------------------------------------------
+
 **📥 [Download Latest Release](https://github.com/uffiulf/razer-viper-v2pro-macos-battery-status/releases/latest)**
+
+-------------------------------------------------------------------------------------------------------------------
+
+
+
 
 ## Features
 
