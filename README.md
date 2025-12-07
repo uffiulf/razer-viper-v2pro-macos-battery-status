@@ -5,7 +5,6 @@ A native macOS menu bar application that displays battery status for supported R
 ![Status: Working](https://img.shields.io/badge/Status-Working-brightgreen)
 ![Version: 1.2.0](https://img.shields.io/badge/Version-1.2.0-blue)
 ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-blue)
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
 
 ## Features
 
@@ -339,12 +338,6 @@ If you successfully port to another mouse:
 1. Fork this repository
 2. Add your mouse's PIDs and any protocol differences
 3. Submit a Pull Request with your mouse model in the title
-
----
-
-## License
-
-MIT License - See [LICENSE](LICENSE) for details.
 
 ---
 
