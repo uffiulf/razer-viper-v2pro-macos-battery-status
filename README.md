@@ -1,11 +1,10 @@
-# Razer Viper V2 Pro Battery Monitor for macOS
+# Razer Battery Monitor for macOS
 
-A native macOS menu bar application that displays battery status for the Razer Viper V2 Pro wireless mouse.
+A native macOS menu bar application that displays battery status for supported Razer wireless mice.
 
 ![Status: Working](https://img.shields.io/badge/Status-Working-brightgreen)
 ![Version: 1.2.0](https://img.shields.io/badge/Version-1.2.0-blue)
 ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-blue)
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
 
 ## Features
 
@@ -21,6 +20,34 @@ A native macOS menu bar application that displays battery status for the Razer V
 - 🖱️ Hover tooltip shows device name
 - 🍎 Native macOS app using Cocoa + IOKit
 - 📦 DMG installer with drag-and-drop installation
+
+## Supported Devices
+
+The following Razer wireless mice are supported (wireless and wired/charging modes):
+
+| Mouse Model | Status |
+|-------------|--------|
+| Razer Viper V2 Pro | ✅ Tested |
+| Razer DeathAdder V2 Pro | ✅ Supported |
+| Razer Viper Ultimate | ✅ Supported |
+| Razer Basilisk Ultimate | ✅ Supported |
+| Razer Naga Pro | ✅ Supported |
+| Razer DeathAdder V3 Pro | ✅ Supported |
+| Razer Basilisk V3 Pro | ✅ Supported |
+| Razer Cobra Pro | ✅ Supported |
+| Razer Naga V2 Pro | ✅ Supported |
+| Razer DeathAdder V4 Pro | ✅ Supported |
+| Razer Viper V3 Pro | ✅ Supported |
+| Razer Mamba Wireless | ✅ Supported |
+| Razer Lancehead Wireless | ✅ Supported |
+| Razer Orochi V2 | ✅ Supported |
+| Razer Naga Epic Chroma | ✅ Supported |
+| Razer Mamba | ✅ Supported |
+| Razer Lancehead | ✅ Supported |
+| Razer Mamba 2012 | ✅ Supported |
+| Razer Naga Epic | ✅ Supported |
+
+*Note: While these devices are listed as supported, battery query protocol compatibility may vary. The app will automatically detect and connect to any supported device that is connected.*
 
 ---
 
@@ -311,12 +338,6 @@ If you successfully port to another mouse:
 1. Fork this repository
 2. Add your mouse's PIDs and any protocol differences
 3. Submit a Pull Request with your mouse model in the title
-
----
-
-## License
-
-MIT License - See [LICENSE](LICENSE) for details.
 
 ---
 
