@@ -6,6 +6,8 @@ A native macOS menu bar application that displays battery status for supported R
 ![Version: 1.2.0](https://img.shields.io/badge/Version-1.2.0-blue)
 ![Platform: macOS](https://img.shields.io/badge/Platform-macOS-blue)
 
+**📥 [Download Latest Release](https://github.com/uffiulf/razer-viper-v2pro-macos-battery-status/releases/latest)**
+
 ## Features
 
 - 🔋 Real-time battery percentage in menu bar
@@ -54,7 +56,7 @@ The following Razer wireless mice are supported (wireless and wired/charging mod
 ## Installation
 
 ### From DMG (Recommended)
-1. Download `RazerBatteryMonitor.dmg`
+1. **[Download latest release](https://github.com/uffiulf/razer-viper-v2pro-macos-battery-status/releases/latest)** - Download `RazerBatteryMonitor.dmg`
 2. Open the DMG and drag the app to Applications
 3. Right-click the app → "Open" (first time only, to bypass Gatekeeper)
 4. Grant Input Monitoring permission if prompted
