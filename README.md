@@ -245,6 +245,12 @@ wLength:       90 bytes
 
 ---
 
+## Known Issues
+
+- **Sleep mode detection**: When the mouse enters sleep mode, the app may display 100% battery + charging icon. This is incorrect behavior and will be fixed in a future update.
+
+---
+
 ## Changelog
 
 ### v1.2.0
